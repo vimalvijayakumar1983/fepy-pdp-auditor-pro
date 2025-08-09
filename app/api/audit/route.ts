@@ -7,32 +7,82 @@ type Extracted = {
   title?: string;
   about?: string;
   bullets?: string[];
-  specs?: Record<string,string>;
+  specs?: Record<string, string>;
   images?: string[];
   price?: string | null;
 };
 
+function norm(s?: string) {
+  return (s || "").replace(/\s+/g, " ").trim();
+}
+
 async function fetchHtml(url: string): Promise<string> {
   const res = await fetch(url, {
-    // A friendly UA helps some sites return full HTML
-    headers: { "user-agent": "Mozilla/5.0 (compatible; FEPY-PDP-Auditor/1.0)" },
-    // Don’t follow infinite redirects
+    headers: {
+      // Friendly UA tends to get fuller HTML
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 FEPY-PDP-Auditor/1.0",
+      "accept-language": "en;q=0.9",
+      accept: "text/html,application/xhtml+xml",
+    },
     redirect: "follow",
-    // 15s timeout
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.text();
 }
 
-function extract($: cheerio.CheerioAPI, url: string): Extracted {
-  // Title (prefer PDP H1, then og:title, then <title>)
-  const h1 = $("h1").first().text().trim();
-  const ogTitle = $('meta[property="og:title"]').attr("content")?.trim();
-  const docTitle = $("title").first().text().trim();
+/** --------- SITE-SPECIFIC: FEPY.COM ---------- */
+function extractFepy($: cheerio.CheerioAPI): Extracted {
+  const title =
+    norm($(".product-name h1").first().text()) ||
+    norm($("h1").first().text());
+
+  // Long description
+  const about =
+    norm($(".product.attribute.description .value").first().text()) ||
+    norm($(".product.attribute.description").first().text());
+
+  // Feature bullets (overview)
+  const bullets: string[] = [];
+  $(".product.attribute.overview li, .product.attribute.overview .value li").each((_, li) => {
+    const t = norm($(li).text());
+    if (t) bullets.push(t);
+  });
+
+  // Attribute blocks (label: .type, value: .value)
+  const specs: Record<string, string> = {};
+  $(".product-info-main .product.attribute").each((_, el) => {
+    const label = norm($(el).find(".type").first().text()).replace(/:$/, "");
+    const value = norm($(el).find(".value").first().text());
+    if (label && value && !specs[label]) specs[label] = value;
+  });
+
+  // Image URLs (gallery)
+  const images: string[] = [];
+  $(".fotorama__stage__frame img, .gallery-placeholder img").each((_, img) => {
+    const src = $(img).attr("src") || $(img).attr("data-src");
+    const s = norm(src);
+    if (s && /^https?:\/\//i.test(s)) images.push(s);
+  });
+
+  // Price
+  const price =
+    norm($(".price-wrapper .price").first().text()) ||
+    norm($(".product-info-main .price").first().text()) ||
+    null;
+
+  return { url: "", title, about, bullets, specs, images, price };
+}
+/** -------------------------------------------- */
+
+/** --------- GENERIC FALLBACK EXTRACTOR -------- */
+function extractGeneric($: cheerio.CheerioAPI): Extracted {
+  const h1 = norm($("h1").first().text());
+  const ogTitle = norm($('meta[property="og:title"]').attr("content"));
+  const docTitle = norm($("title").first().text());
   const title = h1 || ogTitle || docTitle || "";
 
-  // About/description
   const candidates = [
     $("#description").text(),
     $(".product-description").text(),
@@ -40,32 +90,30 @@ function extract($: cheerio.CheerioAPI, url: string): Extracted {
     $('meta[name="description"]').attr("content"),
   ]
     .filter(Boolean)
-    .map((s) => s!.toString().trim());
-  const about = (candidates.find((s) => s.length > 60) || candidates[0] || "").trim();
+    .map((s) => norm(String(s)));
+  const about = candidates.find((s) => s.length > 60) || candidates[0] || "";
 
-  // Bullets: take lis from common sections
+  const bullets: string[] = [];
   const bulletRoots = [
     $(".features, .key-features, .highlights, .about-this-item"),
     $("#features"),
     $("ul:has(li)"),
   ];
-  const bullets: string[] = [];
   for (const root of bulletRoots) {
     root.find("li").each((_, li) => {
-      const t = $(li).text().replace(/\s+/g, " ").trim();
+      const t = norm($(li).text());
       if (t && !bullets.includes(t)) bullets.push(t);
     });
     if (bullets.length >= 3) break;
   }
 
-  // Specs: table rows (th/td) or dt/dd pairs
   const specs: Record<string, string> = {};
   $("table:has(tr)").each((_, tbl) => {
     $(tbl)
       .find("tr")
       .each((__, tr) => {
-        const k = $(tr).find("th,td").eq(0).text().replace(/\s+/g, " ").trim();
-        const v = $(tr).find("th,td").eq(1).text().replace(/\s+/g, " ").trim();
+        const k = norm($(tr).find("th,td").eq(0).text());
+        const v = norm($(tr).find("th,td").eq(1).text());
         if (k && v && !specs[k]) specs[k] = v;
       });
   });
@@ -74,31 +122,28 @@ function extract($: cheerio.CheerioAPI, url: string): Extracted {
       .find("dt")
       .each((i, dt) => {
         const dd = $(dt).next("dd");
-        const k = $(dt).text().replace(/\s+/g, " ").trim();
-        const v = dd.text().replace(/\s+/g, " ").trim();
+        const k = norm($(dt).text());
+        const v = norm(dd.text());
         if (k && v && !specs[k]) specs[k] = v;
       });
   });
 
-  // Images: og:image + <img> srcs (absolute only)
   const images = new Set<string>();
   const addImg = (src?: string) => {
-    if (!src) return;
-    const s = src.trim();
-    if (/^https?:\/\//i.test(s)) images.add(s);
+    const s = norm(src);
+    if (s && /^https?:\/\//i.test(s)) images.add(s);
   };
   addImg($('meta[property="og:image"]').attr("content"));
-  $("img").each((_, img) => addImg($(img).attr("src")));
+  $("img").each((_, img) => addImg($(img).attr("src") || $(img).attr("data-src")));
 
-  // Price: search for currency + amount (AED, $, SAR, QAR, EGP, etc.)
-  const bodyText = $("body").text().replace(/\s+/g, " ");
+  const bodyText = norm($("body").text());
   const priceMatch =
     bodyText.match(/\b(AED|USD|\$|SAR|QAR|OMR|KWD|BHD|EGP)\s?[\d.,]+\b/i) ||
     bodyText.match(/\b[\d.,]+\s?(AED|USD|SAR|QAR|OMR|KWD|BHD|EGP)\b/i);
   const price = priceMatch ? priceMatch[0] : null;
 
   return {
-    url,
+    url: "",
     title,
     about,
     bullets,
@@ -106,6 +151,28 @@ function extract($: cheerio.CheerioAPI, url: string): Extracted {
     images: Array.from(images).slice(0, 12),
     price,
   };
+}
+/** -------------------------------------------- */
+
+function extract(url: string, $: cheerio.CheerioAPI): Extracted {
+  const isFepy = /(^|\.)fepy\.com$/i.test(new URL(url).hostname);
+  const site = isFepy ? extractFepy($) : extractGeneric($);
+
+  // Ensure url is set
+  site.url = url;
+
+  // If FEPY branch produced very little, blend with generic as fallback
+  if (isFepy) {
+    const generic = extractGeneric($);
+    site.title ||= generic.title;
+    site.about ||= generic.about;
+    if (!site.bullets?.length) site.bullets = generic.bullets;
+    if (!Object.keys(site.specs || {}).length) site.specs = generic.specs;
+    if (!site.images?.length) site.images = generic.images;
+    site.price ||= generic.price;
+  }
+
+  return site;
 }
 
 export async function POST(req: NextRequest) {
@@ -117,10 +184,9 @@ export async function POST(req: NextRequest) {
       try {
         const html = await fetchHtml(url);
         const $ = cheerio.load(html);
-        const extracted = extract($, url);
+        const extracted = extract(url, $);
         return { url, audit: buildAuditFromExtracted(extracted) };
       } catch (err: any) {
-        // Return a failed audit row with error info
         return {
           url,
           audit: {
