@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "next telemetry disable || true && tailwindcss init -p || true"
+    "postinstall": "next telemetry disable || true"
   },
   "dependencies": {
     "next": "14.2.5",
