@@ -26,15 +26,17 @@ export default function Page(){
   const addBatch = () => { if (!batchText.trim()) return; addUrls(extractUrls(batchText)); setBatchText(""); };
   const handleCsv = async (file: File) => { const text = await file.text(); addUrls(extractUrls(text)); };
 
-  const runAudit = async ()=>{
-    // For now call local mock; you can switch to server API below if needed.
-    const out = urls.map(u => ({ url: u, audit: draftFixes(mockFetchPdp(u)) }));
-    setRows(out);
+const runAudit = async () => {
+  if (!urls.length) { setRows([]); return; }
+  const res = await fetch("/api/audit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls }),
+  });
+  const data = await res.json();
+  setRows(data.rows || []);
+};
 
-    // To use the API instead, replace above with:
-    // const res = await fetch("/api/audit", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ urls })}); 
-    // const data = await res.json(); setRows(data.rows || []);
-  };
 
   const RowDetail = ({item}:{item:any})=>{
     const a = item.audit;
