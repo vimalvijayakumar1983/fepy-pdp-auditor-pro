@@ -1,5 +1,7 @@
+// app/api/audit/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import * as cheerio from "cheerio";
+import he from "he"; // for decoding HTML entities like &lt; &quot; etc.
 import { buildAuditFromExtracted } from "@/lib/audit";
 
 type Extracted = {
@@ -12,20 +14,35 @@ type Extracted = {
   price?: string | null;
 };
 
+/* -------------------- helpers -------------------- */
+
 function norm(s?: string) {
   return (s || "").replace(/\s+/g, " ").trim();
+}
+
+function stripTags(html?: string) {
+  return norm((html || "").replace(/<[^>]*>/g, ""));
+}
+
+function decodeHtml(html?: string) {
+  return norm(he.decode(html || ""));
+}
+
+function toCleanTextFromHtml(html?: string) {
+  return norm(he.decode(stripTags(html)));
 }
 
 function pushClean(target: string[], value?: string) {
   const v = norm(value);
   if (!v) return;
-  if (/^\d+([.)-])?$/.test(v)) return; // skip garbage like "1", "2."
+  // ignore numeric artifacts like "1", "2", "3." etc.
+  if (/^\d+([.)-])?$/.test(v)) return;
   if (!target.includes(v)) target.push(v);
 }
 
 function parseJsonLd($: cheerio.CheerioAPI) {
   const out: {
-    title?: string; description?: string; brand?: string;
+    title?: string; description?: string;
     bullets?: string[]; specs?: Record<string,string>;
     price?: string | null; images?: string[];
   } = { specs: {}, bullets: [], images: [], price: null };
@@ -43,6 +60,7 @@ function parseJsonLd($: cheerio.CheerioAPI) {
 
         if (item.name) out.title = out.title || norm(item.name);
         if (item.description) out.description = out.description || norm(item.description);
+
         if (item.brand) {
           const b = typeof item.brand === "string" ? item.brand : item.brand?.name;
           if (b) out.specs!["Brand"] = norm(b);
@@ -67,41 +85,55 @@ function parseJsonLd($: cheerio.CheerioAPI) {
           out.images!.push(item.image);
         }
 
+        // sometimes bullets are embedded in description separated by • or newlines
         if (item.description && /[\n•]/.test(item.description)) {
           const parts = String(item.description).split(/\n|•/g);
           for (const p of parts) pushClean(out.bullets!, p);
         }
       }
-    } catch { }
+    } catch { /* ignore malformed JSON-LD */ }
   });
 
   out.images = Array.from(new Set(out.images || []));
   return out;
 }
 
+/* ---------------- FEPY-specific extractor ---------------- */
+
 function extractFepy($: cheerio.CheerioAPI): Partial<Extracted> {
+  // Title
   const title =
     norm($(".product-name h1").first().text()) ||
     norm($(".page-title-wrapper .page-title span").first().text()) ||
     norm($("h1").first().text());
 
-  const about =
-    norm($(".product.attribute.description .value").first().text()) ||
-    norm($("#description .value, #description").first().text());
+  // About / long description – prefer rich .value, decode & strip tags
+  let aboutHtml =
+    $(".product.attribute.description .value").first().html() ||
+    $("#description .value, #description").first().html() || "";
+  const about = toCleanTextFromHtml(aboutHtml);
 
+  // Bullets
   const bullets: string[] = [];
+
+  // 1) <li> items
   $(".product.attribute.overview .value li, .product.attribute.overview li").each((_, li) => {
     pushClean(bullets, $(li).text());
   });
+
+  // 2) <br>-separated lines (decode entities, strip tags)
   const overviewHtml = $(".product.attribute.overview .value").first().html() || "";
   if (overviewHtml) {
     overviewHtml
       .split(/<br\s*\/?>|•|\n/gi)
-      .map(s => s.replace(/<[^>]+>/g, ""))
+      .map(s => toCleanTextFromHtml(s))
       .forEach(t => pushClean(bullets, t));
   }
+
+  // 3) Fallback key-features sections
   $(".key-features li, .highlights li").each((_, li) => pushClean(bullets, $(li).text()));
 
+  // Specs: attribute blocks + "Additional Information" + generic tables
   const specs: Record<string, string> = {};
   $(".product-info-main .product.attribute").each((_, el) => {
     const k = norm($(el).find(".type").first().text()).replace(/:$/, "");
@@ -121,6 +153,7 @@ function extractFepy($: cheerio.CheerioAPI): Partial<Extracted> {
     });
   });
 
+  // Images
   const images: string[] = [];
   $(".fotorama__stage__frame img, .gallery-placeholder img, .product.media img").each((_, img) => {
     const src = $(img).attr("src") || $(img).attr("data-src");
@@ -128,11 +161,13 @@ function extractFepy($: cheerio.CheerioAPI): Partial<Extracted> {
     if (s && /^https?:\/\//i.test(s)) images.push(s);
   });
 
+  // Price
   const price =
     norm($(".price-wrapper .price").first().text()) ||
     norm($(".product-info-main .price").first().text()) ||
     null;
 
+  // JSON-LD merge/fallback
   const ld = parseJsonLd($);
   const mergedSpecs = { ...ld.specs, ...specs };
   const mergedImages = Array.from(new Set([...(images || []), ...(ld.images || [])]));
@@ -151,22 +186,26 @@ function extractFepy($: cheerio.CheerioAPI): Partial<Extracted> {
   };
 }
 
+/* --------------- generic extractor (fallback) --------------- */
+
 function extractGeneric($: cheerio.CheerioAPI): Partial<Extracted> {
   const h1 = norm($("h1").first().text());
   const ogTitle = norm($('meta[property="og:title"]').attr("content"));
   const docTitle = norm($("title").first().text());
   const title = h1 || ogTitle || docTitle || "";
 
-  const candidates = [
-    $("#description").text(),
-    $(".product-description").text(),
-    $(".about, .about-this-item").text(),
+  // About
+  const aboutCandidates = [
+    $("#description").html(),
+    $(".product-description").html(),
+    $(".about, .about-this-item").html(),
     $('meta[name="description"]').attr("content"),
-  ]
-    .filter(Boolean)
-    .map((s) => norm(String(s)));
-  const about = candidates.find((s) => s.length > 60) || candidates[0] || "";
+  ];
+  const about = toCleanTextFromHtml(
+    aboutCandidates.find((x) => (x || "").length > 0) as string | undefined
+  );
 
+  // Bullets
   const bullets: string[] = [];
   const bulletRoots = [
     $(".features, .key-features, .highlights, .about-this-item"),
@@ -175,12 +214,17 @@ function extractGeneric($: cheerio.CheerioAPI): Partial<Extracted> {
   ];
   for (const root of bulletRoots) {
     root.find("li").each((_, li) => {
-      const t = norm($(li).text());
-      if (t && !bullets.includes(t)) bullets.push(t);
+      pushClean(bullets, $(li).text());
     });
     if (bullets.length >= 3) break;
   }
+  // try <br>-separated paragraphs as last resort
+  if (bullets.length < 3) {
+    const anyHtml = ($(".about, .about-this-item, #description").first().html() || "");
+    anyHtml.split(/<br\s*\/?>|•|\n/gi).forEach(chunk => pushClean(bullets, toCleanTextFromHtml(chunk)));
+  }
 
+  // Specs
   const specs: Record<string, string> = {};
   $("table:has(tr)").each((_, tbl) => {
     $(tbl).find("tr").each((__, tr) => {
@@ -198,6 +242,7 @@ function extractGeneric($: cheerio.CheerioAPI): Partial<Extracted> {
     });
   });
 
+  // Images
   const images = new Set<string>();
   const addImg = (src?: string) => {
     const s = norm(src);
@@ -206,6 +251,7 @@ function extractGeneric($: cheerio.CheerioAPI): Partial<Extracted> {
   addImg($('meta[property="og:image"]').attr("content"));
   $("img").each((_, img) => addImg($(img).attr("src") || $(img).attr("data-src")));
 
+  // Price (rough)
   const bodyText = norm($("body").text());
   const priceMatch =
     bodyText.match(/\b(AED|USD|\$|SAR|QAR|OMR|KWD|BHD|EGP)\s?[\d.,]+\b/i) ||
@@ -222,6 +268,8 @@ function extractGeneric($: cheerio.CheerioAPI): Partial<Extracted> {
   };
 }
 
+/* ---------------- selector chooser ---------------- */
+
 function extract(url: string, $: cheerio.CheerioAPI): Extracted {
   const isFepy = /(^|\.)fepy\.com$/i.test(new URL(url).hostname);
   const site = (isFepy ? extractFepy($) : extractGeneric($)) as Extracted;
@@ -229,14 +277,19 @@ function extract(url: string, $: cheerio.CheerioAPI): Extracted {
   return site;
 }
 
+/* ---------------- basic fetch ---------------- */
+
 async function fetchHtml(url: string): Promise<string> {
   const res = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0", accept: "text/html" },
+    headers: { "user-agent": "Mozilla/5.0", accept: "text/html,application/xhtml+xml", "accept-language": "en;q=0.9" },
     redirect: "follow",
+    cache: "no-store",
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.text();
 }
+
+/* ---------------- POST /api/audit ---------------- */
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
