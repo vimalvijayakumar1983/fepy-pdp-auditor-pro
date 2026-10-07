@@ -184,7 +184,7 @@ def decision_payload(row, image_bytes=None):
 
 
 def decisions(row, image_bytes=None):
-    key = os.getenv("OPENAI_API_KEY")
+    key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
         return {"status": "not_configured", "error": "Add OPENAI_API_KEY to the Railway worker to enable Decisions API."}
     payload = decision_payload(row, image_bytes)
@@ -263,8 +263,10 @@ def run_job(job_id, rows, use_decisions, use_embeddings):
                     result["decisions"] = decisions(row, image_bytes)
                     if image_error:
                         result["decisions"]["imageWarning"] = image_error
-                except Exception:
-                    result["decisions"] = {"status": "error", "error": "Decisions request failed or timed out. Retry this row later."}
+                except Exception as error:
+                    kind = type(error).__name__
+                    logging.error("Decisions failed: %s", kind)
+                    result["decisions"] = {"status": "error", "error": "Decisions request failed (" + kind + "). Check worker configuration before retrying."}
             job["results"].append(result)
             job["completed"] = index + 1
             save_job(job)
