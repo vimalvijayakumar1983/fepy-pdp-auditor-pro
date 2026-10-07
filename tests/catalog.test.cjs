@@ -26,3 +26,6 @@ assert.ok(!enriched.suggestedMeta.includes('AED NaN'));
 assert.equal(enriched.suggestedTitle,'Bosch Washer 06008A7971');
 assert.ok(enriched.missingFacts.length);
 console.log('CSV and rule regression tests passed.');
+
+const combined=auditCatalogRow({sku:'C',title_en:'Bosch GSB 18V-50 06019H51L0 Cordless Drill',brand:'Bosch',model_number:'GSB 18V-50 + 06019H51L0'});
+assert.equal(combined.suggestedTitle,'Bosch GSB 18V-50 06019H51L0 Cordless Drill');

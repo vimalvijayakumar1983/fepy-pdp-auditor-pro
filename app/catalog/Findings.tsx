@@ -25,7 +25,7 @@ const guidance: Record<string, { field: string; area: string; why: string }> = {
 
 function priority(issue: AuditIssue) { return issue.severity === "fail" ? "High" : ["thin_description", "missing_specs", "weak_meta"].includes(issue.code) ? "Medium" : "Review"; }
 
-function DraftField({ label, field, current, proposed, hint, live }: { label: string; field: string; current: string; proposed: string; hint: string; live?: boolean }) {
+function DraftField({ label, field, current, proposed, hint, live }: { label: string; field: string; current: string; proposed: string; hint: string; live?: boolean; hasConflicts?:boolean }) {
   const [copyState, setCopyState] = useState("");
   async function copy() {
     try { await navigator.clipboard.writeText(proposed); setCopyState("Copied"); }
@@ -39,13 +39,13 @@ function DraftField({ label, field, current, proposed, hint, live }: { label: st
   </section>;
 }
 
-export default function Findings({ row, source, live = false }: { row: CatalogAudit; source: Record<string, string>; live?: boolean }) {
+export default function Findings({ row, source, live = false, hasConflicts = false }: { row: CatalogAudit; source: Record<string, string>; live?: boolean; hasConflicts?:boolean }) {
   const sorted = [...row.issues].sort((a, b) => (["High", "Medium", "Review"].indexOf(priority(a))) - (["High", "Medium", "Review"].indexOf(priority(b))));
   const drafts = [
     { label: "Product title / H1", field: "title_en", proposed: row.suggestedTitle, hint: "Preserves the supplied brand, model and variant. Check accuracy and avoid repeated keywords." },
     { label: "Search title", field: "meta_title", proposed: row.suggestedMetaTitle, hint: "Editorial guide: around 50–60 characters. Search engines may rewrite the title; preserve the distinguishing product identity." },
-    { label: "Answer-ready product summary", field: "description_en", proposed: row.suggestedIntro, hint: "Uses the supplied description and labelled specifications. If these are thin or generic, add verified use, material, variant and pack contents before publishing." },
-    { label: "Search description", field: "meta_description", proposed: row.suggestedMeta, hint: "Summarises supplied facts without unverified delivery, warranty or performance claims. Aim for a readable snippet, not keyword repetition." },
+    { label: "Answer-ready product summary", field: "description_en", proposed: hasConflicts ? "" : row.suggestedIntro, hint: "Uses the supplied description and labelled specifications. If these are thin or generic, add verified use, material, variant and pack contents before publishing." },
+    { label: "Search description", field: "meta_description", proposed: hasConflicts ? "" : row.suggestedMeta, hint: "Summarises supplied facts without unverified delivery, warranty or performance claims. Aim for a readable snippet, not keyword repetition." },
     { label: "Image alt text", field: "image_alt_1", proposed: row.suggestedAlt, hint: "A candidate based on the product title. Confirm that it describes the actual image; do not use it for a different view or accessory." },
   ];
   return <div className="mt-6 space-y-5">
@@ -55,6 +55,7 @@ export default function Findings({ row, source, live = false }: { row: CatalogAu
         return <div key={issue.code} className="rounded-lg border border-stone-200 p-4"><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${priority(issue) === "High" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900"}`}>{priority(issue)}</span><span className="text-xs text-stone-500">{info?.area || "Catalogue quality"}</span></div><h4 className="mt-2 text-sm font-semibold">{issue.message}</h4><p className="mt-1 text-sm leading-6 text-stone-600">{info?.why}</p><p className="mt-2 text-sm leading-6"><strong>Action: </strong>{issue.recommendation}</p><p className="mt-2 text-xs text-stone-500">Field: {info?.field || issue.code}</p></div>;
       })}{!sorted.length && <p className="rounded-lg bg-emerald-50 p-4 text-sm text-emerald-900">No missing-data issues found in these rules. Check AI assessments and the live page before publication.</p>}</div>
     </section>
+    {hasConflicts && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Description and search-description drafts are withheld until the conflicting or unverified specifications above are resolved.</p>}
     <details open className="rounded-xl bg-stone-50 p-4"><summary className="cursor-pointer font-semibold">Suggested SEO and AI search corrections</summary><p className="mt-2 text-xs leading-5 text-stone-600">Reviewable drafts from {live ? "captured page fields" : "the CSV"}, not verified manufacturer copy. These improve content readiness; ranking or AI citations are not measured by this audit.</p><div className="mt-4 grid gap-3 lg:grid-cols-2">{drafts.map(draft => <DraftField key={draft.field} {...draft} live={live} current={source[draft.field] || ""} />)}</div>
       <section className="mt-4 rounded-lg border border-stone-200 bg-white p-4"><h4 className="text-sm font-semibold">Specifications for an answer-ready facts table</h4>{row.facts?.length ? <dl className="mt-3 divide-y divide-stone-100">{row.facts.map((fact, index) => <div key={index} className="grid grid-cols-2 gap-3 py-2 text-sm"><dt className="text-stone-500">{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : <p className="mt-2 text-sm text-amber-900">No labelled specifications supplied. Add verified facts with units; a rewritten description cannot replace them.</p>}<p className="mt-2 text-xs text-stone-500">Source: {live ? "captured page specifications" : "specs_inline from this CSV"}.</p></section>
       <section className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4"><h4 className="text-sm font-semibold">Facts to verify before publishing</h4><ul className="mt-2 list-disc space-y-1 pl-5 text-sm">{row.missingFacts?.map(fact => <li key={fact}>{fact}</li>)}</ul></section>

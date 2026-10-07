@@ -89,7 +89,9 @@ export function auditCatalogRow(row: CatalogRow, options: { checkArabic?: boolea
   if (metaTitle && metaTitle.length > 60) issues.push({ code: "long_meta_title", severity: "review", message: "Meta title is longer than 60 characters.", recommendation: "Review the search preview and preserve brand, model and distinguishing specification. 60 characters is an editorial guide, not a Google limit." });
   if (!metaDescription || metaDescription.length < 50) issues.push({ code: "weak_meta", severity: "review", message: "Meta description is missing or short.", recommendation: "Summarise the product and distinguishing verified facts. Aim for a concise search snippet; Google may rewrite it." });
 
-  const suggestedTitle = [brand && !title.toLowerCase().includes(brand.toLowerCase()) ? brand : "", title || category, model && !title.toLowerCase().includes(model.toLowerCase()) ? model : ""].filter(Boolean).join(" ").replace(/\s+/g, " ");
+  const compact = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const missingModelParts = model.split(/\s*[+|]\s*/).filter(part=>part && !compact(title).includes(compact(part))).join(" ");
+  const suggestedTitle = [brand && !title.toLowerCase().includes(brand.toLowerCase()) ? brand : "", title || category, missingModelParts].filter(Boolean).join(" ").replace(/\s+/g, " ");
   const facts = specs.split("|").map(item => {
     const split = item.indexOf(":");
     return split > 0 ? { label: text(item.slice(0, split)).replace(/_/g, " "), value: text(item.slice(split + 1)) } : null;
