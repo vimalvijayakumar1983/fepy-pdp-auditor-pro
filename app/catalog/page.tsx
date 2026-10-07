@@ -35,17 +35,20 @@ export default function CatalogPage() {
   const [results, setResults] = useState<Result[]>([]);
   const [summary, setSummary] = useState<{ total: number; pass: number; review: number; fail: number } | null>(null);
   const [error, setError] = useState("");
-  const failing = useMemo(() => results.filter((row) => row.status !== "pass"), [results]);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState("all");
+  const shown = useMemo(() => results.filter((row) => filter === "all" || row.status === filter), [results, filter]);
 
   async function runAudit() {
     setError("");
-    const rows = parseCsv(csv);
+    setBusy(true);
     const response = await fetch("/api/catalog-audit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows }),
+      body: JSON.stringify({ rows: parseCsv(csv) }),
     });
     const data = await response.json();
+    setBusy(false);
     if (!response.ok) {
       setError(data.error || "Audit failed");
       return;
@@ -55,24 +58,44 @@ export default function CatalogPage() {
   }
 
   return (
-    <main style={{ maxWidth: 980, margin: "0 auto", padding: 24, fontFamily: "Arial, sans-serif" }}>
-      <p style={{ letterSpacing: 1, color: "#956B43" }}>FEPY PDP AUDITOR</p>
-      <h1>Catalog audit</h1>
-      <p>Paste the Excel export saved as CSV. This pass uses catalog rules, SEO checks, and AEO checks. It does not publish fixes.</p>
-      <textarea value={csv} onChange={(event) => setCsv(event.target.value)} rows={10} style={{ width: "100%", fontFamily: "monospace" }} />
-      <button onClick={runAudit} style={{ marginTop: 12, padding: "10px 16px" }}>Run audit</button>
+    <main style={{ maxWidth: 1080, margin: "0 auto", padding: "32px 20px 64px", color: "#302E2C", fontFamily: "Georgia, serif" }}>
+      <p style={{ letterSpacing: 3, fontSize: 12, color: "#956B43" }}>FEPY CATALOG</p>
+      <h1 style={{ fontSize: 42, fontWeight: 500, margin: "8px 0" }}>PDP auditor</h1>
+      <p style={{ maxWidth: 640, lineHeight: 1.5 }}>Paste the developer export as CSV. Each row is scored for missing data, SEO, and answer-engine readiness. Corrections stay here until someone accepts them.</p>
+      <textarea value={csv} onChange={(event) => setCsv(event.target.value)} rows={8} style={{ width: "100%", marginTop: 16, padding: 12, border: "1px solid #e6d7c3", background: "#fff", fontFamily: "ui-monospace, monospace", fontSize: 12 }} />
+      <button onClick={runAudit} disabled={busy} style={{ marginTop: 12, background: "#302E2C", color: "#F8D798", border: 0, padding: "12px 18px", cursor: "pointer" }}>{busy ? "Scoring…" : "Run audit"}</button>
       {error && <p>{error}</p>}
-      {summary && <p>{summary.total} rows. {summary.pass} pass, {summary.review} review, {summary.fail} fail.</p>}
-      {failing.map((row) => (
-        <section key={row.sku} style={{ borderTop: "1px solid #ddd", padding: "16px 0" }}>
-          <h2>{row.sku} · {row.status} · {row.score}</h2>
+      {summary && (
+        <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 24 }}>
+          {[["Rows", summary.total], ["Pass", summary.pass], ["Review", summary.review], ["Fail", summary.fail]].map(([label, value]) => (
+            <div key={String(label)} style={{ background: "#fff", border: "1px solid #e6d7c3", padding: 16 }}>
+              <div style={{ fontSize: 12, letterSpacing: 1 }}>{label}</div>
+              <div style={{ fontSize: 28 }}>{value}</div>
+            </div>
+          ))}
+        </section>
+      )}
+      {results.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          {["all", "fail", "review", "pass"].map((item) => (
+            <button key={item} onClick={() => setFilter(item)} style={{ marginRight: 8, padding: "6px 10px", border: "1px solid #CB9658", background: filter === item ? "#F8D798" : "#fff" }}>{item}</button>
+          ))}
+        </div>
+      )}
+      {shown.map((row) => (
+        <article key={row.sku} style={{ background: "#fff", border: "1px solid #e6d7c3", padding: 18, marginTop: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}>{row.sku}</h2>
+            <strong>{row.status} · {row.score}</strong>
+          </div>
+          <p>{row.title || "No English title"}</p>
           <p>SEO {row.seoScore} · AEO {row.aeoScore}</p>
           <ul>{row.issues.map((issue) => <li key={issue.code}><strong>{issue.message}</strong> {issue.recommendation}</li>)}</ul>
           <p><strong>Suggested title:</strong> {row.suggestedTitle}</p>
           <p><strong>Suggested intro:</strong> {row.suggestedIntro}</p>
           <p><strong>Suggested meta:</strong> {row.suggestedMeta}</p>
           <p><strong>Suggested alt:</strong> {row.suggestedAlt}</p>
-        </section>
+        </article>
       ))}
     </main>
   );
