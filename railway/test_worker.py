@@ -42,6 +42,14 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(checks['category_fit']['assessment'], 'refused')
         self.assertEqual(checks['description_quality']['assessment'], 'unavailable')
 
+    def test_copied_key_whitespace_is_trimmed(self):
+        class Reply:
+            status_code = 401
+        with patch.dict(os.environ, {'OPENAI_API_KEY': ' test-key\n'}), patch.object(worker.httpx, 'post', return_value=Reply()) as request:
+            result = worker.decisions(worker.clean_row({'sku': 'A'}))
+        self.assertEqual(request.call_args.kwargs['headers']['Authorization'], 'Bearer test-key')
+        self.assertIn('HTTP 401', result['error'])
+
     def test_duplicate_indices_and_no_self_matches(self):
         neighbors = worker.similarities({0: [1., 0.], 1: [1., 0.], 2: [0., 1.]})
         self.assertEqual(neighbors[0], [{'rowIndex': 1, 'similarity': 1.0}])
