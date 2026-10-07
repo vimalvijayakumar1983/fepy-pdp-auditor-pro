@@ -53,7 +53,7 @@ function humanStock(value: string) {
   return value.split("_").join(" ");
 }
 
-export function auditCatalogRow(row: CatalogRow): CatalogAudit {
+export function auditCatalogRow(row: CatalogRow, options: { checkArabic?: boolean } = {}): CatalogAudit {
   const sku = text(row.sku) || "MISSING-SKU";
   const title = text(row.title_en);
   const brand = text(row.brand);
@@ -84,7 +84,7 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   if (image && !alt) issues.push({ code: "missing_alt", severity: "review", message: "Image alt text is empty.", recommendation: "Alt text should be the product name, not a file name." });
   if (description.length < 80) issues.push({ code: "thin_description", severity: "review", message: "Description needs a completeness review.", recommendation: "Explain what the product is, its verified use, key specifications and pack contents. Length alone does not determine quality." });
   if (!specs) issues.push({ code: "missing_specs", severity: "review", message: "Product specifications are missing.", recommendation: "Export verified dimensions, capacity, material and pack quantity with units, as applicable." });
-  if (!arabic) issues.push({ code: "missing_arabic", severity: "review", message: "Arabic title is empty.", recommendation: "Add title_ar where the UAE storefront serves Arabic." });
+  if (options.checkArabic !== false && !arabic) issues.push({ code: "missing_arabic", severity: "review", message: "Arabic title is empty.", recommendation: "Add title_ar where the UAE storefront serves Arabic." });
   if (!metaTitle) issues.push({ code: "missing_meta_title", severity: "review", message: "Meta title is empty.", recommendation: "Use a unique meta title under 60 characters with brand and model." });
   if (metaTitle && metaTitle.length > 60) issues.push({ code: "long_meta_title", severity: "review", message: "Meta title is longer than 60 characters.", recommendation: "Review the search preview and preserve brand, model and distinguishing specification. 60 characters is an editorial guide, not a Google limit." });
   if (!metaDescription || metaDescription.length < 50) issues.push({ code: "weak_meta", severity: "review", message: "Meta description is missing or short.", recommendation: "Summarise the product and distinguishing verified facts. Aim for a concise search snippet; Google may rewrite it." });
@@ -109,7 +109,7 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   const missingFacts = [!brand && "Verified manufacturer/brand", !model && "Manufacturer model or part number (where applicable)", !facts.length && "Labelled product specifications with units", "Verify material, size/colour, pack quantity, included items and intended use against a supplier source before adding them."].filter((value): value is string => !!value);
 
   const seoChecks = [Boolean(title), Boolean(metaTitle), Boolean(metaDescription), Boolean(alt), hasUrl(url), hasUrl(image)];
-  const aeoChecks = [description.length >= 80, Boolean(specs), Boolean(brand), Boolean(model), Boolean(price), Boolean(arabic)];
+  const aeoChecks = [description.length >= 80, Boolean(specs), Boolean(brand), Boolean(model), Boolean(price), ...(options.checkArabic === false ? [] : [Boolean(arabic)])];
   const seoScore = Math.round((seoChecks.filter(Boolean).length / seoChecks.length) * 100);
   const aeoScore = Math.round((aeoChecks.filter(Boolean).length / aeoChecks.length) * 100);
   const failCount = issues.filter((issue) => issue.severity === "fail").length;
@@ -119,8 +119,8 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   return { sku, title, score, seoScore, aeoScore, status, issues, suggestedMetaTitle, facts, missingFacts, suggestedTitle, suggestedIntro, suggestedMeta, suggestedAlt };
 }
 
-export function auditCatalog(rows: CatalogRow[]) {
-  const results = rows.map(auditCatalogRow);
+export function auditCatalog(rows: CatalogRow[], options: { checkArabic?: boolean } = {}) {
+  const results = rows.map(row => auditCatalogRow(row, options));
   const summary = {
     total: results.length,
     pass: results.filter((row) => row.status === "pass").length,

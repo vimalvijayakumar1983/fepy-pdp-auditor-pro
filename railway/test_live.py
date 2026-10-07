@@ -22,6 +22,13 @@ class LiveTests(unittest.TestCase):
         self.assertEqual({f['code'] for f in findings}, {'canonical_missing','noindex','h1_count','schema_missing','schema_invalid_json','mobile_overflow'})
         self.assertIn('noindex',next(f['evidence'] for f in findings if f['code']=='noindex'))
 
+    def test_weight_conflict_requires_supplier_verification(self):
+        data={'canonical':'https://fepy.com/p','h1Count':1,'productSchema':True,'row':{'description_en':'Weighing only 1.7 kg','specs_inline':'Weight: 3.44 kg | Voltage: 18V'}}
+        finding=live_pdp.technical_findings(data,'https://fepy.com/p')[0]
+        self.assertEqual(finding['code'],'weight_conflict')
+        self.assertIn('1.7',finding['evidence'])
+        self.assertIn('shipping weights',finding['action'])
+
     def test_failed_page_does_not_receive_ai_checks(self):
         import importlib.util
         spec=importlib.util.spec_from_file_location('worker_live',Path(__file__).with_name('main.py'))

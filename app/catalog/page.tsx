@@ -18,16 +18,17 @@ type Capabilities = { decisions: { configured: boolean }; embeddings: { configur
 const SAMPLE = `sku,product_url,title_en,title_ar,brand,model_number,category,price_aed,currency,stock_status,description_en,image_url_1,image_alt_1,meta_title,meta_description,specs_inline
 FEPY-PW-001,https://www.fepy.com/power-tools/bosch-easyaquatak-120,Bosch EasyAquatak 120 High-Pressure Washer 1500W,,Bosch,06008A7971,Power Tools,370,AED,in_stock,Bosch EasyAquatak 120 is a 1500W pressure washer for small to medium outdoor cleaning jobs. It includes a 5m hose.,,,Bosch EasyAquatak 120 1500W,1500W pressure washer with 5m hose for outdoor cleaning in the UAE.,wattage: 1500W | hose_length: 5m
 FEPY-HW-220,https://www.fepy.com/pattex-silicone-sealant-sl212,Pattex Silicone Sealant SL212 280ml Transparent,,Pattex,SL212,Construction Chemicals,11.25,AED,in_stock,General purpose silicone sealant.,,,Pattex SL212 sealant,,`;
-const labels: Record<string, string> = { content_consistency: "Product facts agree", description_quality: "Description usefulness", category_fit: "Category fit", image_match: "Image matches product" };
+const labels: Record<string, string> = { content_consistency: "Product facts agree", description_quality: "Description usefulness", category_fit: "Category fit", image_match: "Image matches product", desktop_first_view: "Desktop first viewport", mobile_first_view: "Mobile first viewport" };
 function readable(value: string) { return value.replace(/_/g, " "); }
 function reviewNeeded(ai?: AIResult) {
   return !!ai && (ai.decisions.status === "error" || ai.decisions.status === "not_configured" || !!ai.decisions.imageWarning || !!ai.decisions.checks?.some(c => c.needsReview) || ai.embeddings.status === "error" || !!ai.embeddings.imageError || !!ai.embeddings.textNeighbors?.length || !!ai.embeddings.imageNeighbors?.length);
 }
 
 function assessmentText(value: string) {
-  return ({ consistent: "Supplied facts agree", contradiction: "Conflicting product details", useful: "Useful description", generic_or_irrelevant: "Generic or irrelevant description", fits: "Suitable category", wrong_category: "Review category", matches: "Image appears consistent", wrong_product: "Possible image mismatch", insufficient_evidence: "Not enough evidence", unavailable: "Not evaluated", refused: "Assessment unavailable" } as Record<string, string>)[value] || readable(value);
+  return ({ readable_product_area: "Visible product area is readable", visible_layout_issue: "Possible visible layout issue", consistent: "Supplied facts agree", contradiction: "Conflicting product details", useful: "Useful description", generic_or_irrelevant: "Generic or irrelevant description", fits: "Suitable category", wrong_category: "Review category", matches: "Image appears consistent", wrong_product: "Possible image mismatch", insufficient_evidence: "Not enough evidence", unavailable: "Not evaluated", refused: "Assessment unavailable" } as Record<string, string>)[value] || readable(value);
 }
 function checkAction(name: string, assessment: string, needsReview: boolean) {
+  if (name.endsWith("_first_view")) return "Review the linked screenshot. This assesses the captured viewport only; interactions and full-page usability were not tested.";
   if (assessment === "unavailable" || assessment === "refused") return "No usable assessment returned. Review this check manually.";
   if (assessment === "insufficient_evidence") return "Add supplier-backed details or a clearer image before judging this check.";
   if (name === "description_quality" && assessment !== "useful") return "Add verified applications, distinguishing specifications and pack contents. Review the proposed summary below; it cannot supply missing facts.";
@@ -83,7 +84,7 @@ export default function CatalogPage() {
           const sources: Record<string,string>[] = Array.from({length:data.total},()=>({}));
           pages.forEach(item=>{sources[item.rowIndex] = item.live!.extracted || {};});
           setSourceRows(sources);
-          const audits = auditCatalog(sources);
+          const audits = auditCatalog(sources, {checkArabic:false});
           setResults(audits.results);
           const valid = pages.map(item=>audits.results[item.rowIndex]);
           setSummary({total:valid.length,pass:valid.filter(x=>x.status==="pass").length,review:valid.filter(x=>x.status==="review").length,fail:valid.filter(x=>x.status==="fail").length});
