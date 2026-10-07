@@ -78,12 +78,12 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   if (title && brand && !title.toLowerCase().includes(brand.toLowerCase())) issues.push({ code: "brand_not_in_title", severity: "review", message: "Brand is not in the English title.", recommendation: `Start the title with ${brand}.` });
   if (!model) issues.push({ code: "missing_model", severity: "review", message: "Model number is empty.", recommendation: "Add the manufacturer model so search and answer engines can cite the exact item." });
   if (!hasUrl(url)) issues.push({ code: "missing_url", severity: "fail", message: "Product URL is missing or not absolute.", recommendation: "Export the live canonical URL." });
-  if (!price || !Number.isFinite(Number(price)) || Number(price) <= 0) issues.push({ code: "missing_price", severity: "fail", message: "Price is missing.", recommendation: "Export price_aed as a number, no currency symbol." });
+  if (!price || !Number.isFinite(Number(price)) || Number(price) <= 0) issues.push({ code: "missing_price", severity: "fail", message: "Price is missing or invalid.", recommendation: "Export price_aed as a number, no currency symbol." });
   if (!stock) issues.push({ code: "missing_stock", severity: "review", message: "Stock status is empty.", recommendation: "Use in_stock, out_of_stock, or backorder." });
   if (!hasUrl(image)) issues.push({ code: "missing_image", severity: "fail", message: "Primary image URL is missing.", recommendation: "Export a fetchable CDN URL in image_url_1." });
   if (image && !alt) issues.push({ code: "missing_alt", severity: "review", message: "Image alt text is empty.", recommendation: "Alt text should be the product name, not a file name." });
   if (description.length < 80) issues.push({ code: "thin_description", severity: "review", message: "Description needs a completeness review.", recommendation: "Explain what the product is, its verified use, key specifications and pack contents. Length alone does not determine quality." });
-  if (!specs) issues.push({ code: "missing_specs", severity: "review", message: "No specs_inline value.", recommendation: "Add labeled facts such as voltage: 18V | size: 12 mm." });
+  if (!specs) issues.push({ code: "missing_specs", severity: "review", message: "Product specifications are missing.", recommendation: "Export verified dimensions, capacity, material and pack quantity with units, as applicable." });
   if (!arabic) issues.push({ code: "missing_arabic", severity: "review", message: "Arabic title is empty.", recommendation: "Add title_ar where the UAE storefront serves Arabic." });
   if (!metaTitle) issues.push({ code: "missing_meta_title", severity: "review", message: "Meta title is empty.", recommendation: "Use a unique meta title under 60 characters with brand and model." });
   if (metaTitle && metaTitle.length > 60) issues.push({ code: "long_meta_title", severity: "review", message: "Meta title is longer than 60 characters.", recommendation: "Review the search preview and preserve brand, model and distinguishing specification. 60 characters is an editorial guide, not a Google limit." });
@@ -99,7 +99,12 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   const suggestedIntro = [description && title && description.toLowerCase().startsWith(title.toLowerCase()) ? description : [identity, description].filter(Boolean).join(" "), specSentence && `Specifications: ${specSentence}.`].filter(Boolean).join(" ");
   const concise = (value: string, length: number) => value.length <= length ? value : value.slice(0, length + 1).replace(/\s+\S*$/, "").trim();
   const suggestedMetaTitle = suggestedTitle;
-  const suggestedMeta = concise([identity, description && !description.toLowerCase().includes(suggestedTitle.toLowerCase()) ? description : "", specSentence].filter(Boolean).join(" "), 160);
+  const snippetParts = [identity, specSentence && `Specifications: ${specSentence}.`, ...description.split(/(?<=[.!?])\s+/)].filter(Boolean);
+  let suggestedMeta = "";
+  for (const part of snippetParts) {
+    if (!suggestedMeta && part.length > 160) { suggestedMeta = concise(part, 157) + "…"; break; }
+    if ([suggestedMeta, part].filter(Boolean).join(" ").length <= 160) suggestedMeta = [suggestedMeta, part].filter(Boolean).join(" ");
+  }
   const suggestedAlt = title ? title : "";
   const missingFacts = [!brand && "Verified manufacturer/brand", !model && "Manufacturer model or part number (where applicable)", !facts.length && "Labelled product specifications with units", "Verify material, size/colour, pack quantity, included items and intended use against a supplier source before adding them."].filter((value): value is string => !!value);
 

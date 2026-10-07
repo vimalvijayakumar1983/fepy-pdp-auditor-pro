@@ -40,7 +40,7 @@ function DraftField({ label, field, current, proposed, hint }: { label: string; 
 }
 
 export default function Findings({ row, source }: { row: CatalogAudit; source: Record<string, string> }) {
-  const sorted = [...row.issues].sort((a, b) => (a.severity === "fail" ? 0 : 1) - (b.severity === "fail" ? 0 : 1));
+  const sorted = [...row.issues].sort((a, b) => (["High", "Medium", "Review"].indexOf(priority(a))) - (["High", "Medium", "Review"].indexOf(priority(b))));
   const drafts = [
     { label: "Product title / H1", field: "title_en", proposed: row.suggestedTitle, hint: "Preserves the supplied brand, model and variant. Check accuracy and avoid repeated keywords." },
     { label: "Search title", field: "meta_title", proposed: row.suggestedMetaTitle, hint: "Editorial guide: around 50–60 characters. Search engines may rewrite the title; preserve the distinguishing product identity." },
