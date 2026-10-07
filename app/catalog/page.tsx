@@ -21,7 +21,7 @@ FEPY-HW-220,https://www.fepy.com/pattex-silicone-sealant-sl212,Pattex Silicone S
 const labels: Record<string, string> = { content_consistency: "Product facts agree", description_quality: "Description usefulness", category_fit: "Category fit", image_match: "Image matches product", desktop_first_view: "Desktop first viewport", mobile_first_view: "Mobile first viewport" };
 function readable(value: string) { return value.replace(/_/g, " "); }
 function reviewNeeded(ai?: AIResult) {
-  return !!ai && (ai.decisions.status === "error" || ai.decisions.status === "not_configured" || !!ai.decisions.imageWarning || !!ai.decisions.checks?.some(c => c.needsReview) || ai.embeddings.status === "error" || !!ai.embeddings.imageError || !!ai.embeddings.textNeighbors?.length || !!ai.embeddings.imageNeighbors?.length);
+  return !!ai && (!!ai.live?.technical?.length || ai.live?.status === "error" || ai.decisions.status === "error" || ai.decisions.status === "not_configured" || !!ai.decisions.imageWarning || !!ai.decisions.checks?.some(c => c.needsReview) || ai.embeddings.status === "error" || !!ai.embeddings.imageError || !!ai.embeddings.textNeighbors?.length || !!ai.embeddings.imageNeighbors?.length);
 }
 
 function assessmentText(value: string) {

@@ -49,7 +49,7 @@ EXTRACT = r'''() => {
  const primary = gallery.find(img => img.naturalWidth >= 150 && img.getBoundingClientRect().width > 80);
  const images = [...new Set([primary?.currentSrc, ...schemaImages, ...gallery.map(img => img.currentSrc)].filter(Boolean))].slice(0, 12);
  const image = schemaImages[0] || images[0] || '';
- const imageElement = [...document.images].find(img => img.currentSrc === image || img.src === image);
+ const imageElement = [...document.images].find(img => img.currentSrc.split('?')[0] === image.split('?')[0] || img.src.split('?')[0] === image.split('?')[0]);
  const descriptionSelectors = ['[itemprop="description"]', '.product.description', '#description', '[class*="product-description"]', '[class*="productDescription"]', '[data-testid="product-description"]'];
  let description = [descriptionSelectors.map(txt).find(Boolean), txt('#features-benefits')].filter(Boolean).join(' ');
  if (!description && product?.description) description = plain(product.description);
@@ -135,7 +135,7 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
         validate_url(final_url)
         initial = decode_result(await page.evaluate(EXTRACT))
         preview = initial.get("bodyPreview", "").lower()
-        if any(s in preview for s in ["verify you are human", "checking your browser", "access denied", "captcha"]):
+        if any(s in preview for s in ["verify you are human", "checking your browser", "access denied", "captcha", "just a moment", "automated traffic", "unusual traffic"]):
             raise ValueError("Page blocked by verification or access screening; it was not audited.")
         if not initial.get("productSchema") and not (initial.get("pdpSections") and initial.get("h1Count") == 1):
             raise ValueError("Product JSON-LD was not found. This URL may be a category, error page, or unsupported PDP; it was not treated as a product.")
@@ -158,7 +158,17 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
         data.update(mobileOverflow=size['width'] > size['viewport'] + 8, mobilePageWidth=size['width'])
         return {"status": "completed", "requestedUrl": url, "finalUrl": final_url, "auditedAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), "durationSeconds": round(time.monotonic()-start, 2), "extracted": data["row"], "sources": data["sources"], "technical": technical_findings(data, url), "canonical": data["canonical"], "robots": data["robots"], "productSchemaDetected": data["productSchema"], "h1Count": data["h1Count"], "imageUrls": data["imageUrls"], "evidence": {"desktop": f"{job_id}-{index}-desktop.jpg", "mobile": f"{job_id}-{index}-mobile.jpg"}}
     except Exception as error:
-        return {"status": "error", "requestedUrl": url, "durationSeconds": round(time.monotonic()-start,2), "error": str(error) if isinstance(error, ValueError) else "Browser collection failed ("+type(error).__name__+"). No page assessment was made."}
+        diagnostic = {}
+        if page:
+            try:
+                visible = decode_result(await page.evaluate("() => JSON.stringify({pageTitle: document.title, visibleText: (document.body?.innerText || '').slice(0,1200), documentUrl: location.href})"))
+                diagnostic.update(visible)
+                shot = evidence_dir / f"{job_id}-{index}-desktop.jpg"
+                save_shot(await page.screenshot(format="jpeg", quality=80), shot)
+                diagnostic["evidence"] = {"desktop": shot.name}
+            except Exception:
+                pass
+        return dict(diagnostic, status="error", requestedUrl=url, durationSeconds=round(time.monotonic()-start,2), error=str(error) if isinstance(error, ValueError) else "Browser collection failed ("+type(error).__name__+"). No page assessment was made.")
     finally:
         if page:
             try:
