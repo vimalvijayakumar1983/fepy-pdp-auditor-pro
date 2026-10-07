@@ -101,6 +101,8 @@ export default function CatalogPage() {
     const link = document.createElement("a"); link.href = url; link.download = "fepy-catalog-audit.json"; link.click(); URL.revokeObjectURL(url);
   }
 
+  const failedAIChecks = job?.results.filter(row => [row.decisions.status, row.embeddings.status].some(status => ["error", "not_configured"].includes(status)) || row.embeddings.imageStatus === "error").length || 0;
+
   return (
     <main className="mx-auto max-w-6xl px-5 py-8 text-stone-800">
       <p className="text-xs tracking-[.25em] text-amber-800">FEPY CATALOG</p>
@@ -125,7 +127,7 @@ export default function CatalogPage() {
         </div>
       </section>
       {error && <p role="alert" className="mt-4 rounded bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-      {job && <section aria-live="polite" className="mt-4 rounded bg-amber-50 p-4 text-sm"><p>AI audit: {readable(job.status)} · {job.completed}/{job.total} products checked</p><progress className="mt-2 w-full" max={job.total} value={job.completed} aria-label="AI audit progress" /><p className="mt-2 text-xs">Keep this page open to receive results. Audit results are available on the worker for 24 hours; download them to keep a copy.</p>{pollError && <p className="mt-2 text-red-800">{pollError} Retrying progress refresh…</p>}</section>}
+      {job && <section aria-live="polite" className="mt-4 rounded bg-amber-50 p-4 text-sm"><p>AI audit: {job.status === "completed" && failedAIChecks ? "finished with errors" : readable(job.status)} · {job.completed}/{job.total} products processed</p>{failedAIChecks > 0 && <p className="mt-2 font-medium text-red-800">{failedAIChecks} product(s) have failed or unavailable AI checks. Review the errors below; these are not successful assessments.</p>}<progress className="mt-2 w-full" max={job.total} value={job.completed} aria-label="AI audit progress" /><p className="mt-2 text-xs">Keep this page open to receive results. Audit results are available on the worker for 24 hours; download them to keep a copy.</p>{pollError && <p className="mt-2 text-red-800">{pollError} Retrying progress refresh…</p>}</section>}
       {summary && <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">{[["Rows", summary.total], ["Rules pass", summary.pass], ["Rules review", summary.review], ["Rules fail", summary.fail]].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-stone-200 bg-white p-4"><p className="text-xs text-stone-500">{label}</p><p className="mt-1 text-3xl">{value}</p></div>)}</section>}
       {results.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{["all", "fail", "review", "pass", "ai_review"].map(item => <button key={item} aria-pressed={filter === item} onClick={() => setFilter(item)} className={`rounded border px-3 py-2 text-sm ${filter === item ? "border-amber-500 bg-amber-100" : "border-stone-200 bg-white"}`}>{item === "ai_review" ? "AI needs review" : readable(item)}</button>)}</div>}
       {shown.map(({ row, index, ai }) => <article key={index} className="mt-4 rounded-xl border border-stone-200 bg-white p-5">
