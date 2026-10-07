@@ -71,7 +71,10 @@ def build_router(connection, require_auth):
 
     @router.get('/browser-sessions')
     def browser_capabilities():
-        return {'configured': bool(os.getenv('BROWSER_USE_API_KEY', '').strip()), 'countryCode': 'ae', 'sessionMinutes': 30, 'auditAccessApproved': os.getenv('FEPY_AUDITOR_ACCESS_APPROVED', '').lower() == 'true'}
+        with connection() as db:
+            active = [json.loads(value) for (value,) in db.execute('SELECT payload FROM browser_sessions ORDER BY created DESC').fetchall()]
+        resumable = [{key: item.get(key) for key in ('id', 'status', 'timeoutAt', 'countryCode')} for item in active if item['status'] == 'active' and item['expires'] > time.time()]
+        return {'activeSessions': resumable, 'configured': bool(os.getenv('BROWSER_USE_API_KEY', '').strip()), 'countryCode': 'ae', 'sessionMinutes': 30, 'auditAccessApproved': os.getenv('FEPY_AUDITOR_ACCESS_APPROVED', '').lower() == 'true'}
 
     @router.post('/browser-sessions', status_code=201)
     def create_session():

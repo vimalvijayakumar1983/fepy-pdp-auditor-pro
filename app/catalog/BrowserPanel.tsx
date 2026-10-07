@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 export type BrowserSession = {id:string;status:string;liveUrl:string|null;timeoutAt:string|null;countryCode:string;locationVerification:string};
-type Capabilities = {configured:boolean; auditAccessApproved:boolean; sessionMinutes:number};
+type Capabilities = {activeSessions?: Pick<BrowserSession,"id"|"status"|"timeoutAt"|"countryCode">[]; configured:boolean; auditAccessApproved:boolean; sessionMinutes:number};
 export default function BrowserPanel({session,onSession,running}: {session:BrowserSession|null;onSession:(session:BrowserSession|null,approved:boolean)=>void;running:boolean}) {
   const [capabilities,setCapabilities] = useState<Capabilities|null>(null);
   const [busy,setBusy] = useState(false);
@@ -32,6 +32,16 @@ export default function BrowserPanel({session,onSession,running}: {session:Brows
     },15000);
     return ()=>{clearInterval(timer);abort.abort();};
   },[session?.id,session?.status,capabilities?.auditAccessApproved,onSession]);
+  async function resumeSession(id:string) {
+    setBusy(true);setError("");
+    try{
+      const response=await fetch(`/api/catalog-browser/${id}`);
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error || data.detail || "Browser could not be resumed.");
+      onSession(data,!!capabilities?.auditAccessApproved);
+    }catch(err){setError(err instanceof Error?err.message:"Browser resume failed.");}
+    finally{setBusy(false);}
+  }
   async function changeSession(method:"POST"|"DELETE") {
     setBusy(true);setError("");
     try {
@@ -49,6 +59,7 @@ export default function BrowserPanel({session,onSession,running}: {session:Brows
     {capabilities && !capabilities.configured && <p className="mt-3 text-sm text-amber-900">Setup needed: add BROWSER_USE_API_KEY to the Railway worker. Create the key in your Browser Use dashboard and save it as a private service variable.</p>}
     <div className="my-3 flex flex-wrap items-center gap-3">
       <button type="button" disabled={!capabilities?.configured || busy || running || !!active} onClick={()=>changeSession("POST")} className="rounded bg-stone-800 px-4 py-2 text-sm text-white disabled:opacity-50">{busy?"Working…":"Start UAE browser"}</button>
+      {!session && capabilities?.activeSessions?.map((saved,index)=><button key={saved.id} type="button" disabled={busy || running} onClick={()=>resumeSession(saved.id)} className="rounded border px-4 py-2 text-sm disabled:opacity-50">Resume existing browser {index+1}</button>)}
       {session && <button type="button" disabled={busy || running} onClick={()=>changeSession("DELETE")} className="rounded border px-4 py-2 text-sm disabled:opacity-50">Stop browser</button>}
       {active && <label className="text-sm"><input type="checkbox" checked={control && !running} disabled={running} onChange={e=>setControl(e.target.checked)} /> Allow manual control</label>}
     </div>

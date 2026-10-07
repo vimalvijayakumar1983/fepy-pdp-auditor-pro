@@ -43,6 +43,14 @@ class CloudTests(unittest.TestCase):
         self.assertNotIn('cdpUrl', item)
         self.assertNotIn('providerId', item)
         self.assertNotIn('cdp-secret', str(item))
+    def test_resume_inventory_has_no_live_or_cdp_urls(self):
+        item,_=self.create()
+        response=self.client.get('/browser-sessions',headers=self.auth).json()
+        self.assertEqual(response['activeSessions'][0]['id'],item['id'])
+        self.assertNotIn('liveUrl',response['activeSessions'][0])
+        self.assertNotIn('cdpUrl',response['activeSessions'][0])
+        self.assertNotIn('providerId',response['activeSessions'][0])
+
     def test_auth_missing_key_and_invalid_id(self):
         self.assertEqual(self.client.post('/browser-sessions').status_code, 401)
         with patch.dict(os.environ, {'BROWSER_USE_API_KEY': ''}):
