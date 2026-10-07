@@ -75,7 +75,7 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   if (title && brand && !title.toLowerCase().includes(brand.toLowerCase())) issues.push({ code: "brand_not_in_title", severity: "review", message: "Brand is not in the English title.", recommendation: `Start the title with ${brand}.` });
   if (!model) issues.push({ code: "missing_model", severity: "review", message: "Model number is empty.", recommendation: "Add the manufacturer model so search and answer engines can cite the exact item." });
   if (!hasUrl(url)) issues.push({ code: "missing_url", severity: "fail", message: "Product URL is missing or not absolute.", recommendation: "Export the live canonical URL." });
-  if (!price || Number(price) <= 0) issues.push({ code: "missing_price", severity: "fail", message: "Price is missing.", recommendation: "Export price_aed as a number, no currency symbol." });
+  if (!price || !Number.isFinite(Number(price)) || Number(price) <= 0) issues.push({ code: "missing_price", severity: "fail", message: "Price is missing.", recommendation: "Export price_aed as a number, no currency symbol." });
   if (!stock) issues.push({ code: "missing_stock", severity: "review", message: "Stock status is empty.", recommendation: "Use in_stock, out_of_stock, or backorder." });
   if (!hasUrl(image)) issues.push({ code: "missing_image", severity: "fail", message: "Primary image URL is missing.", recommendation: "Export a fetchable CDN URL in image_url_1." });
   if (image && !alt) issues.push({ code: "missing_alt", severity: "review", message: "Image alt text is empty.", recommendation: "Alt text should be the product name, not a file name." });
@@ -86,8 +86,8 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   if (metaTitle && metaTitle.length > 60) issues.push({ code: "long_meta_title", severity: "review", message: "Meta title is longer than 60 characters.", recommendation: "Shorten it so Google does not truncate the brand or model." });
   if (!metaDescription || metaDescription.length < 50) issues.push({ code: "weak_meta", severity: "review", message: "Meta description is missing or short.", recommendation: "Write 120-160 characters with the product, spec, and availability cue." });
 
-  const suggestedTitle = [brand, model, title || category].filter(Boolean).join(" ").replace(/\s+/g, " ").slice(0, 110);
-  const suggestedIntro = `${brand || "This"} ${model || "product"} is a ${category.toLowerCase()} for UAE site and trade work. ${specs || "Add the key spec before publishing."}`;
+  const suggestedTitle = [brand && !title.toLowerCase().includes(brand.toLowerCase()) ? brand : "", model && !title.toLowerCase().includes(model.toLowerCase()) ? model : "", title || category].filter(Boolean).join(" ").replace(/\s+/g, " ").slice(0, 110);
+  const suggestedIntro = description || [suggestedTitle, specs || "Add verified product specifications before publishing."].join(". ");
   const suggestedMeta = `${suggestedTitle}. ${price ? `AED ${price}` : "Price on request"}${stock ? `, ${humanStock(stock)}` : ""}.`.slice(0, 160);
   const suggestedAlt = suggestedTitle;
 
