@@ -101,3 +101,23 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(job['results'][0]['decisions']['status'], 'not_configured')
 
 if __name__ == '__main__': unittest.main()
+
+class HistoryTests(unittest.TestCase):
+    def test_history_requires_auth_and_only_contains_summary(self):
+        self.assertEqual(client.get('/jobs').status_code,401)
+        worker.save_job(dict(id='history-test',created=worker.time.time(),status='completed',total=1,completed=1,mode='live',results=[dict(sku='A',live={'extracted':{'title_en':'Public test product','description_en':'Large evidence'}})]))
+        data=client.get('/jobs',headers=AUTH).json()
+        item=next(j for j in data['jobs'] if j['id']=='history-test')
+        self.assertEqual(item['title'],'Public test product')
+        self.assertNotIn('Large evidence',str(item))
+    def test_reassessment_reuses_page_without_browser_and_preserves_capture_time(self):
+        page=dict(status='completed',requestedUrl='https://fepy.com/product',auditedAt='original-time',extracted={'sku':'P','title_en':'Pattex adhesive'},technical=[])
+        worker.save_job(dict(id='old-evidence',created=worker.time.time(),status='completed',total=1,completed=1,results=[dict(rowIndex=0,sku='P',live=page)]))
+        with patch.object(worker.EXECUTOR,'submit') as submit:
+            response=client.post('/jobs/old-evidence/reassess',headers=AUTH,json={'referenceUrls':[]})
+        self.assertEqual(response.status_code,202)
+        args=submit.call_args.args
+        self.assertIs(args[0],worker.run_job)
+        self.assertEqual(args[5][0]['auditedAt'],'original-time')
+        self.assertTrue(args[6])
+        with worker.connection() as db:db.execute('DELETE FROM jobs WHERE id=?',(response.json()['id'],))

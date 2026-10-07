@@ -60,7 +60,12 @@ EXTRACT = r'''() => {
    if (cells.length >= 2 && cells[0] && cells[1]) specs.push(`${cells[0]}: ${cells.slice(1).join(' ')}`);
  }
  if (!specs.length && product?.additionalProperty) for (const p of [].concat(product.additionalProperty)) if (p.name && p.value !== undefined) specs.push(`${clean(p.name)}: ${clean(p.value)}${p.unitText ? ' '+clean(p.unitText) : ''}`);
- const body = clean(document.body?.innerText).slice(0, 2000);
+ const fullBody = clean(document.body?.innerText);
+ const body = fullBody.slice(0, 2000);
+ const pageContext = [...fullBody.matchAll(/.{0,40}(?:free delivery|orders above|orders over).{0,90}/gi)].map(x=>x[0]).join(' | ');
+ const reviewStart=fullBody.indexOf('Based on');
+ const reviews=reviewStart>=0 ? fullBody.slice(reviewStart,reviewStart+4500).split(/Similar Products|Why Buy From Fepy/)[0] : '';
+ const referenceUrls=[...document.querySelectorAll('a[href]')].map(a=>a.href).filter(u=>/^https:\/\/(datasheets\.tdx\.henkel\.com|dm\.henkel-dam\.com|www\.bosch-professional\.com|www\.makita\.ae)\//.test(u) && /\.pdf(?:$|\?)/i.test(u)).slice(0,2);
  const h1 = [...document.querySelectorAll('h1')].map(x => clean(x.innerText)).filter(Boolean);
  const availability = String(offer?.availability || attr('[itemprop="availability"]', 'href'));
  const brand = typeof product?.brand === 'string' ? product.brand : product?.brand?.name || '';
@@ -74,7 +79,7 @@ EXTRACT = r'''() => {
  if (!faq) { const fullText = clean(document.body?.innerText); const begin=fullText.indexOf('Frequently Asked Questions'); if(begin>=0) faq=fullText.slice(begin).split(/Ratings & Reviews|Customer Reviews|Related Products/)[0]; }
  faq = faq.slice(0,6000);
  return JSON.stringify({
-  row: { sku: clean(product?.sku || product?.productID || txt('[itemprop="sku"]')), product_url: location.href, title_en: h1[0] || clean(product?.name), title_ar: document.documentElement.lang?.startsWith('ar') ? h1[0] : '', brand: clean(brand), model_number: model, category: clean(category), price_aed: clean(offer?.price || attr('[itemprop="price"]','content')), currency: clean(offer?.priceCurrency || attr('[itemprop="priceCurrency"]','content')), stock_status: availability.endsWith('InStock') ? 'in_stock' : availability.endsWith('OutOfStock') ? 'out_of_stock' : availability.endsWith('BackOrder') ? 'backorder' : '', description_en: description.slice(0,8000), image_url_1: image, image_alt_1: clean(imageElement?.alt), meta_title: document.title, meta_description: meta('description'), faq_text: faq, specs_inline: [...new Set(specs)].join(' | ').slice(0,8000) },
+  row: { sku: clean(product?.sku || product?.productID || txt('[itemprop="sku"]')), product_url: location.href, title_en: h1[0] || clean(product?.name), title_ar: document.documentElement.lang?.startsWith('ar') ? h1[0] : '', brand: clean(brand), model_number: model, category: clean(category), price_aed: clean(offer?.price || attr('[itemprop="price"]','content')), currency: clean(offer?.priceCurrency || attr('[itemprop="priceCurrency"]','content')), stock_status: availability.endsWith('InStock') ? 'in_stock' : availability.endsWith('OutOfStock') ? 'out_of_stock' : availability.endsWith('BackOrder') ? 'backorder' : '', description_en: description.slice(0,8000), image_url_1: image, image_alt_1: clean(imageElement?.alt), meta_title: document.title, meta_description: meta('description'), faq_text: faq, page_context: pageContext, reviews_text: reviews, reference_urls: JSON.stringify(referenceUrls), specs_inline: [...new Set(specs)].join(' | ').slice(0,8000) },
   title: document.title, canonical: attr('link[rel="canonical"]','href'), robots: meta('robots'), h1Count: h1.length, productSchema: !!product, pdpSections: !!document.querySelector('#features-benefits, #key-specifications'), malformedSchema, schemaModel: clean(product?.model || product?.mpn), schemaProductName: clean(product?.name), schemaSku: clean(product?.sku), schemaCurrency: clean(offer?.priceCurrency), schemaAvailability: availability, imageUrls: images, bodyPreview: body,
   sources: { title_en: 'rendered H1 / Product schema fallback', description_en: (txt('#features-benefits') || descriptionSelectors.some(selector => txt(selector))) ? 'rendered Features & Benefits / product description' : product?.description ? 'Product schema description' : 'not found', specs_inline: 'rendered Key Specifications / Product additionalProperty fallback', price_aed: 'Product Offer schema / itemprop', brand: 'Product schema', category: crumbLinks.length ? 'rendered breadcrumb links' : 'Product category / BreadcrumbList schema', model_number: clean(product?.model || product?.mpn) ? 'Product schema model / mpn' : modelSpec ? 'rendered Model No specification' : 'not found', faq_text: 'rendered FAQ section', image_url_1: 'product gallery / Product schema', meta_title: 'document title', meta_description: 'meta description' }
  });
@@ -141,6 +146,8 @@ def technical_findings(data, requested_url):
         add("currency", "review", "Product offer currency needs review", data["schemaCurrency"], "Confirm currency agrees with the price visible to UAE customers.")
     if data.get("mobileOverflow"):
         add("mobile_overflow", "review", "Possible horizontal overflow on mobile", f"Page width {data.get('mobilePageWidth')}px; viewport 390px", "Inspect the mobile screenshot and check tables, product images and fixed elements.")
+    from quality import page_findings
+    findings.extend(page_findings(row))
     return findings
 
 
