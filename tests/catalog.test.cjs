@@ -15,4 +15,14 @@ const row=auditCatalogRow({sku:'A',title_en:'Bosch GSB Drill',brand:'Bosch',mode
 assert.ok(row.issues.some(i=>i.code==='missing_price'));
 assert.equal(row.suggestedTitle,'Bosch GSB Drill');
 assert.ok(!row.suggestedIntro.includes('UAE site and trade work'));
+const enriched=auditCatalogRow({sku:'B',title_en:'Bosch Washer',brand:'Bosch',model_number:'06008A7971',description_en:'For outdoor cleaning.',specs_inline:'wattage: 1500W | hose_length: 5m | unsupported | blank:'});
+assert.deepEqual(enriched.facts,[{label:'wattage',value:'1500W'},{label:'hose length',value:'5m'}]);
+assert.ok(enriched.suggestedIntro.includes('Bosch Washer 06008A7971'));
+assert.ok(enriched.suggestedIntro.includes('1500W'));
+assert.ok(enriched.suggestedIntro.includes('5m'));
+assert.ok(!enriched.suggestedIntro.includes('warranty'));
+assert.ok(!enriched.suggestedMeta.includes('Price on request'));
+assert.ok(!enriched.suggestedMeta.includes('AED NaN'));
+assert.equal(enriched.suggestedTitle,'Bosch Washer 06008A7971');
+assert.ok(enriched.missingFacts.length);
 console.log('CSV and rule regression tests passed.');
