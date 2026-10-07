@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { parseCsv } from "@/lib/csv";
 import Findings from "./Findings";
+import BrowserPanel, {type BrowserSession} from "./BrowserPanel";
 import LiveEvidence, { type LivePage } from "./LiveEvidence";
 import { auditCatalog } from "@/lib/catalogAudit";
 import type { CatalogAudit } from "@/lib/catalogAudit";
@@ -40,6 +41,9 @@ function checkAction(name: string, assessment: string, needsReview: boolean) {
 
 export default function CatalogPage() {
   const [mode, setMode] = useState<"csv" | "live">("csv");
+  const [browserSession,setBrowserSession] = useState<BrowserSession|null>(null);
+  const [browserApproved,setBrowserApproved] = useState(false);
+  const updateBrowser = useCallback((session:BrowserSession|null,approved:boolean)=>{setBrowserSession(session);setBrowserApproved(approved);},[]);
   const [urls, setUrls] = useState("");
   const [csv, setCsv] = useState(SAMPLE);
   const [results, setResults] = useState<CatalogAudit[]>([]);
@@ -129,7 +133,8 @@ export default function CatalogPage() {
     try {
       const pages = [...new Set(urls.split(/\s+/).map(x=>x.trim()).filter(Boolean))];
       if (!pages.length || pages.length > 100) throw new Error("Enter 1–100 FEPY product URLs, one per line.");
-      const response = await fetch("/api/catalog-live", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls:pages,decisions:useDecisions,embeddings:useEmbeddings})});
+      if (browserSession && (!browserApproved || browserSession.status!=="active")) throw new Error("The live UAE browser is not ready for automated FEPY audits. Review its access and status message.");
+      const response = await fetch("/api/catalog-live", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls:pages,browserSessionId:browserSession?.id,decisions:useDecisions,embeddings:useEmbeddings})});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || data.detail || "Live audit could not start.");
       setJob(data);
@@ -156,7 +161,7 @@ export default function CatalogPage() {
         <p className="mt-1 text-xs text-stone-500">Quoted commas and multiline descriptions are supported. AI checks: up to 500 rows. Rules only: up to 5,000.</p>
         <input aria-label="Upload catalogue CSV" type="file" accept=".csv,text/csv" className="my-3 block text-sm" disabled={busy || running} onChange={async event => { const file = event.target.files?.[0]; if (file) { if (file.size > 10 * 1024 * 1024) { setError("CSV exceeds 10 MB."); return; } setCsv(await file.text()); } }} />
         <textarea id="catalog-csv" value={csv} disabled={busy || running} onChange={event => setCsv(event.target.value)} rows={7} className="w-full rounded border border-stone-300 p-3 font-mono text-xs" />
-        </> : <><label htmlFor="catalog-urls" className="block font-medium">FEPY product page URLs</label><p className="mt-1 mb-3 text-xs text-stone-500">One HTTPS product URL per line, up to 100. Browser Use reads each live page and captures desktop/mobile evidence before assessment.</p><textarea id="catalog-urls" value={urls} disabled={busy || running} onChange={e=>setUrls(e.target.value)} rows={7} placeholder="https://www.fepy.com/your-product" className="w-full rounded border border-stone-300 p-3 font-mono text-xs" /><button disabled={busy || running} className="mt-2 text-xs underline" onClick={()=>{try {setUrls(parseCsv(csv).map(row=>row.product_url).filter(Boolean).join("\n"));} catch {setError("Load a valid CSV first.");}}}>Use product URLs from CSV</button></>}
+        </> : <><BrowserPanel session={browserSession} onSession={updateBrowser} running={!!running || busy} /><label htmlFor="catalog-urls" className="block font-medium">FEPY product page URLs</label><p className="mt-1 mb-3 text-xs text-stone-500">One HTTPS product URL per line, up to 100. Browser Use reads each live page and captures desktop/mobile evidence before assessment.</p><textarea id="catalog-urls" value={urls} disabled={busy || running} onChange={e=>setUrls(e.target.value)} rows={7} placeholder="https://www.fepy.com/your-product" className="w-full rounded border border-stone-300 p-3 font-mono text-xs" /><button disabled={busy || running} className="mt-2 text-xs underline" onClick={()=>{try {setUrls(parseCsv(csv).map(row=>row.product_url).filter(Boolean).join("\n"));} catch {setError("Load a valid CSV first.");}}}>Use product URLs from CSV</button></>}
         <div className="mt-4 flex flex-wrap gap-5 text-sm">
           <label><input type="checkbox" checked={useDecisions} disabled={busy || running} onChange={e => setUseDecisions(e.target.checked)} className="mr-2" />Content & image decisions</label>
           <label><input type="checkbox" checked={useEmbeddings} disabled={busy || running} onChange={e => setUseEmbeddings(e.target.checked)} className="mr-2" />Image similarity & duplicate candidates</label>

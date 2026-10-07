@@ -9,7 +9,7 @@ export async function workerRequest(path: string, init: RequestInit = {}) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init.headers },
     });
     const data = await response.json();
-    return Response.json(data, { status: response.status });
+    return Response.json(data, { status: response.status, headers: { "Cache-Control": "private, no-store" } });
   } catch {
     return Response.json({ error: "The AI worker could not be reached. Please retry." }, { status: 502 });
   }

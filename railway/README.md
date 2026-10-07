@@ -45,3 +45,11 @@ Chromium is installed in the Docker image. Browser Use runs in `/opt/browser` wi
 ### FEPY access prerequisite
 
 The deployed Railway Chromium pilot on 2026-10-07 reached FEPY's **Vercel Security Checkpoint**, returning **Failed to verify your browser / Code 29**. It did not obtain product evidence and no AI assessment was made. The site owner must authorize this audit worker in the FEPY site's security configuration before live audits can be validated. Do not disable certificate verification, disguise fingerprints or rotate proxies to evade the checkpoint. Access blocks are captured as diagnostic screenshots; remaining URLs are skipped without browsing. CSV audits remain usable.
+
+## Interactive UAE browser
+
+Set `BROWSER_USE_API_KEY` privately on the Railway worker. `/browser-sessions` GET reports readiness; POST starts a blank Browser Use Cloud API v4 browser with `proxyCountryCode=ae`, a 30-minute timeout, recording disabled, and CAPTCHA solving disabled. The catalog live-audit tab embeds the provider's interactive `liveUrl`, with manual control, watch mode, and a stop button. GET/DELETE `/browser-sessions/{id}` refreshes/stops a worker-owned session. All worker routes require the worker bearer token; Next.js proxies them server-side with private/no-store responses. Keep the Vercel project protected. Never log or share the live URL: it grants browser control. CDP and provider credentials stay on the worker.
+
+A maximum of two active sessions is allowed by this worker. Creation requests are not automatically retried or switched to another country. The UI reports that UAE routing was requested; egress IP location has not been independently verified. Browser Use browser/proxy charges apply. Stop sessions when finished; closing the app does not stop billing before the timeout.
+
+After the FEPY site administrator permits the auditor, set `FEPY_AUDITOR_ACCESS_APPROVED=true`. Only then may `/live-jobs` receive a `browserSessionId` to attach the existing collector to the same Cloud browser shown in the panel. A new network route must not be used to evade the known FEPY checkpoint. The panel starts blank and performs no automatic FEPY navigation. While collection runs, manual control is disabled locally to avoid changing evidence mid-audit.

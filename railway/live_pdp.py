@@ -180,9 +180,13 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
                 pass
 
 
-async def collect_pages(urls, job_id, evidence_dir, update):
+async def collect_pages(urls, job_id, evidence_dir, update, cdp_url=None):
     from browser_use import Browser
-    browser = Browser(headless=True, executable_path=os.getenv("AUDITOR_CHROMIUM_PATH", "/usr/bin/chromium"), allowed_domains=list(HOSTS), enable_default_extensions=False, accept_downloads=False, auto_download_pdfs=False, permissions=[], chromium_sandbox=False, keep_alive=False)
+    options = dict(allowed_domains=list(HOSTS), enable_default_extensions=False, accept_downloads=False, auto_download_pdfs=False, permissions=[])
+    if cdp_url:
+        browser = Browser(cdp_url=cdp_url, keep_alive=True, **options)
+    else:
+        browser = Browser(headless=True, executable_path=os.getenv("AUDITOR_CHROMIUM_PATH", "/usr/bin/chromium"), chromium_sandbox=False, keep_alive=False, **options)
     results = []
     evidence_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -214,7 +218,7 @@ if __name__ == "__main__":
         temporary.write_text(json.dumps({"pagesCompleted": count, "pages": pages, "finished": False}))
         temporary.replace(output)
     try:
-        pages = asyncio.run(collect_pages(config["urls"], config["jobId"], Path(config["evidenceDir"]), write_progress))
+        pages = asyncio.run(collect_pages(config["urls"], config["jobId"], Path(config["evidenceDir"]), write_progress, config.get("cdpUrl")))
         write_progress(len(pages), pages)
         data = json.loads(output.read_text())
         data["finished"] = True

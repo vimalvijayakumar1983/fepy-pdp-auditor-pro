@@ -78,6 +78,8 @@ def require_auth(authorization: str = Header(default="")):
 
 
 app = FastAPI(title="FEPY AI catalogue auditor", docs_url=None, redoc_url=None)
+from cloud_browser import build_router, session_for_audit
+app.include_router(build_router(connection, require_auth))
 
 
 class AuditRequest(BaseModel):
@@ -338,12 +340,13 @@ def get_job(job_id: str):
 
 
 class LiveAuditRequest(BaseModel):
+    browserSessionId: str | None = None
     urls: list[str] = Field(min_length=1, max_length=100)
     decisions: bool = True
     embeddings: bool = True
 
 
-def run_live_job(job_id, urls, use_decisions, use_embeddings):
+def run_live_job(job_id, urls, use_decisions, use_embeddings, cdp_url=None):
     job = {"id": job_id, "created": time.time(), "mode": "live", "status": "running", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
     def update(count, pages):
         job["pagesCompleted"] = count
@@ -358,7 +361,8 @@ def run_live_job(job_id, urls, use_decisions, use_embeddings):
                 file.unlink()
         config_path = DATA_DIR / f"{job_id}-browser-input.json"
         output_path = DATA_DIR / f"{job_id}-browser-output.json"
-        config_path.write_text(json.dumps({"urls": urls, "jobId": job_id, "evidenceDir": str(evidence_dir), "output": str(output_path)}))
+        config_path.touch(mode=0o600, exist_ok=True)
+        config_path.write_text(json.dumps({"urls": urls, "jobId": job_id, "evidenceDir": str(evidence_dir), "output": str(output_path), "cdpUrl": cdp_url}))
         # Browser Use pins dependencies incompatible with Transformers. Keep its runtime
         # isolated and pass only public PDP URLs/evidence files, never API credentials.
         child_env = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "TMPDIR", "LANG", "AUDITOR_CHROMIUM_PATH"}}
@@ -402,6 +406,7 @@ def run_live_job(job_id, urls, use_decisions, use_embeddings):
 @app.post("/live-jobs", status_code=202, dependencies=[Depends(require_auth)])
 def create_live_job(body: LiveAuditRequest):
     from live_pdp import validate_url
+    cdp_url = session_for_audit(connection, body.browserSessionId) if body.browserSessionId else None
     try:
         urls = list(dict.fromkeys(validate_url(url.strip()) for url in body.urls))
     except (ValueError, OSError) as error:
@@ -415,7 +420,7 @@ def create_live_job(body: LiveAuditRequest):
         job_id = secrets.token_hex(16)
         job = {"id": job_id, "created": time.time(), "mode": "live", "status": "queued", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
         db.execute("INSERT INTO jobs VALUES (?,?,?)", (job_id, job["created"], json.dumps(job)))
-    EXECUTOR.submit(run_live_job, job_id, urls, body.decisions, body.embeddings)
+    EXECUTOR.submit(run_live_job, job_id, urls, body.decisions, body.embeddings, cdp_url)
     return job
 
 

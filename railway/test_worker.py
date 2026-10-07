@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -7,6 +8,7 @@ from pathlib import Path
 
 os.environ['AUDITOR_DATA_DIR'] = tempfile.mkdtemp()
 os.environ['AUDITOR_WORKER_TOKEN'] = 'test-worker-token'
+sys.path.insert(0, str(Path(__file__).parent))
 from fastapi.testclient import TestClient
 spec = importlib.util.spec_from_file_location('worker', Path(__file__).with_name('main.py'))
 worker = importlib.util.module_from_spec(spec)
