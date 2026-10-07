@@ -2,7 +2,9 @@ import asyncio
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
+import tempfile
 sys.path.insert(0, str(Path(__file__).parent))
 import live_pdp
 
@@ -21,6 +23,20 @@ class LiveTests(unittest.TestCase):
         findings=live_pdp.technical_findings(data,'https://fepy.com/p')
         self.assertEqual({f['code'] for f in findings}, {'canonical_missing','noindex','h1_count','schema_missing','schema_invalid_json','mobile_overflow'})
         self.assertIn('noindex',next(f['evidence'] for f in findings if f['code']=='noindex'))
+
+    def test_access_block_stops_remaining_page_requests(self):
+        class Browser:
+            def __init__(self, **kwargs): pass
+            async def start(self): pass
+            async def stop(self): pass
+        blocked={'status':'error','requestedUrl':'https://fepy.com/one','failureKind':'access_blocked','error':'Verification blocked'}
+        updates=[]
+        with patch.dict(sys.modules, {'browser_use':SimpleNamespace(Browser=Browser)}), patch.object(live_pdp,'collect_one',AsyncMock(return_value=blocked)) as collect:
+            result=asyncio.run(live_pdp.collect_pages(['https://fepy.com/one','https://fepy.com/two','https://fepy.com/three'],'test',Path(tempfile.mkdtemp()),lambda count,pages:updates.append(count)))
+        self.assertEqual(collect.await_count,1)
+        self.assertEqual(len(result),3)
+        self.assertEqual(result[1]['failureKind'],'skipped_after_block')
+        self.assertEqual(updates[-1],1)
 
     def test_screenshots_are_labelled_and_scoped(self):
         import importlib.util

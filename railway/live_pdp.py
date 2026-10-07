@@ -135,8 +135,8 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
         validate_url(final_url)
         initial = decode_result(await page.evaluate(EXTRACT))
         preview = initial.get("bodyPreview", "").lower()
-        if any(s in preview for s in ["verify you are human", "checking your browser", "access denied", "captcha", "just a moment", "automated traffic", "unusual traffic"]):
-            raise ValueError("Page blocked by verification or access screening; it was not audited.")
+        if any(s in preview for s in ["verify you are human", "checking your browser", "access denied", "captcha", "just a moment", "automated traffic", "unusual traffic", "failed to verify your browser", "vercel security checkpoint"]):
+            raise ValueError("FEPY verification or security screening blocked this audit browser. No page assessment was made. The site administrator must permit the authorised audit worker before rerunning.")
         if not initial.get("productSchema") and not (initial.get("pdpSections") and initial.get("h1Count") == 1):
             raise ValueError("Product JSON-LD was not found. This URL may be a category, error page, or unsupported PDP; it was not treated as a product.")
         # Only known read-only product section toggles. No general autonomous agent or form actions.
@@ -163,6 +163,9 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
             try:
                 visible = decode_result(await page.evaluate("() => JSON.stringify({pageTitle: document.title, visibleText: (document.body?.innerText || '').slice(0,1200), documentUrl: location.href})"))
                 diagnostic.update(visible)
+                block_text = (visible.get("pageTitle", "") + " " + visible.get("visibleText", "")).lower()
+                if any(marker in block_text for marker in ["vercel security checkpoint", "failed to verify your browser", "verify you are human", "checking your browser", "just a moment", "automated traffic", "unusual traffic"]):
+                    diagnostic["failureKind"] = "access_blocked"
                 shot = evidence_dir / f"{job_id}-{index}-desktop.jpg"
                 save_shot(await page.screenshot(format="jpeg", quality=80), shot)
                 diagnostic["evidence"] = {"desktop": shot.name}
@@ -192,6 +195,11 @@ async def collect_pages(urls, job_id, evidence_dir, update):
                 result = {"status": "error", "requestedUrl": url, "error": "Page collection timed out. No page assessment was made."}
             results.append(result)
             update(index + 1, results)
+            if result.get("failureKind") == "access_blocked":
+                for remaining in urls[index + 1:]:
+                    results.append({"status": "error", "requestedUrl": remaining, "failureKind": "skipped_after_block", "error": "Not opened because site verification blocked this batch. No assessment was made."})
+                update(index + 1, results)
+                break
     finally:
         await browser.stop()
     return results

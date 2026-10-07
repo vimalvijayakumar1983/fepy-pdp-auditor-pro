@@ -235,7 +235,7 @@ def similarities(vectors):
 def run_job(job_id, rows, use_decisions, use_embeddings, live=None):
     job = {"id": job_id, "created": time.time(), "status": "running", "total": len(rows), "completed": 0, "results": [], "warnings": ["Similarity and confidence are review signals, not proof of an exact SKU match."]}
     if live is not None:
-        job.update(mode="live", phase="assessment", pagesCompleted=len(live))
+        job.update(mode="live", phase="assessment", pagesCompleted=sum(page.get("failureKind") != "skipped_after_block" for page in live), pagesSkipped=sum(page.get("failureKind") == "skipped_after_block" for page in live))
     save_job(job)
     text_vectors, image_vectors = {}, {}
     embedding_failure = None
