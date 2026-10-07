@@ -47,6 +47,13 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(neighbors[0], [{'rowIndex': 1, 'similarity': 1.0}])
         self.assertEqual(neighbors[2], [])
 
+    def test_embedding_normalizes_model_precision(self):
+        with patch.object(worker, "cached", return_value=[.5] * 768):
+            vector = worker.embedding("text", "key")
+        self.assertAlmostEqual(sum(v * v for v in vector), 1.0)
+        with patch.object(worker, "cached", return_value=[0.] * 768):
+            with self.assertRaises(ValueError): worker.embedding("text", "key")
+
     def test_cache_and_image_host_restrictions(self):
         count = []
         def compute():

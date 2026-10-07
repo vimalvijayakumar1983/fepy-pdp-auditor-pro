@@ -6,6 +6,7 @@ import io
 import ipaddress
 import json
 import logging
+import math
 import os
 import secrets
 import socket
@@ -151,7 +152,14 @@ def get_model():
 
 
 def embedding(value, key):
-    return cached("eg2:768:" + key, lambda: get_model().encode(value, normalize_embeddings=True).tolist())
+    vector = cached("eg2:768:" + key, lambda: get_model().encode(value, normalize_embeddings=True).tolist())
+    if len(vector) != 768 or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in vector):
+        raise ValueError("EmbeddingGemma returned an invalid vector.")
+    norm = math.sqrt(sum(v * v for v in vector))
+    if not norm:
+        raise ValueError("EmbeddingGemma returned a zero vector.")
+    # Normalize in Python precision after converting from the model dtype.
+    return [v / norm for v in vector]
 
 
 def digest(value):
