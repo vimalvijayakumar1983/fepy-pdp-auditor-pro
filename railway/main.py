@@ -12,6 +12,8 @@ import os
 import secrets
 import socket
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -342,7 +344,6 @@ class LiveAuditRequest(BaseModel):
 
 
 def run_live_job(job_id, urls, use_decisions, use_embeddings):
-    from live_pdp import collect_pages
     job = {"id": job_id, "created": time.time(), "mode": "live", "status": "running", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
     def update(count, pages):
         job["pagesCompleted"] = count
@@ -355,7 +356,41 @@ def run_live_job(job_id, urls, use_decisions, use_embeddings):
         for file in evidence_dir.glob("*.jpg"):
             if file.stat().st_mtime < time.time() - 86400:
                 file.unlink()
-        pages = asyncio.run(collect_pages(urls, job_id, evidence_dir, update))
+        config_path = DATA_DIR / f"{job_id}-browser-input.json"
+        output_path = DATA_DIR / f"{job_id}-browser-output.json"
+        config_path.write_text(json.dumps({"urls": urls, "jobId": job_id, "evidenceDir": str(evidence_dir), "output": str(output_path)}))
+        # Browser Use pins dependencies incompatible with Transformers. Keep its runtime
+        # isolated and pass only public PDP URLs/evidence files, never API credentials.
+        child_env = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "TMPDIR", "LANG", "AUDITOR_CHROMIUM_PATH"}}
+        child_env["ANONYMIZED_TELEMETRY"] = "false"
+        process = subprocess.Popen([os.getenv("BROWSER_USE_PYTHON", sys.executable), str(Path(__file__).with_name("live_pdp.py")), str(config_path)], env=child_env, stdout=subprocess.DEVNULL)
+        deadline = time.monotonic() + len(urls) * 75 + 30
+        last_count = -1
+        try:
+            while process.poll() is None:
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Browser batch timed out")
+                if output_path.is_file():
+                    progress = json.loads(output_path.read_text())
+                    if progress["pagesCompleted"] != last_count:
+                        last_count = progress["pagesCompleted"]
+                        update(last_count, progress["pages"])
+                time.sleep(.5)
+            if process.returncode != 0 or not output_path.is_file():
+                raise RuntimeError("Browser runtime failed")
+            output = json.loads(output_path.read_text())
+            if not output.get("finished"):
+                raise RuntimeError("Browser batch incomplete")
+            pages = output["pages"]
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            config_path.unlink(missing_ok=True)
+            output_path.unlink(missing_ok=True)
         rows = [clean_row(page.get("extracted", {"product_url": page["requestedUrl"]})) for page in pages]
         run_job(job_id, rows, use_decisions, use_embeddings, pages)
     except Exception as error:

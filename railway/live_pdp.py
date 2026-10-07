@@ -185,3 +185,24 @@ async def collect_pages(urls, job_id, evidence_dir, update):
     finally:
         await browser.stop()
     return results
+
+
+if __name__ == "__main__":
+    import sys
+    config = json.loads(Path(sys.argv[1]).read_text())
+    output = Path(config["output"])
+    def write_progress(count, pages):
+        temporary = output.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"pagesCompleted": count, "pages": pages, "finished": False}))
+        temporary.replace(output)
+    try:
+        pages = asyncio.run(collect_pages(config["urls"], config["jobId"], Path(config["evidenceDir"]), write_progress))
+        write_progress(len(pages), pages)
+        data = json.loads(output.read_text())
+        data["finished"] = True
+        temporary = output.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data))
+        temporary.replace(output)
+    except Exception as error:
+        print("Browser runtime failed: " + type(error).__name__, file=sys.stderr)
+        sys.exit(1)
