@@ -1,102 +1,144 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { parseCsv } from "@/lib/csv";
+import type { CatalogAudit } from "@/lib/catalogAudit";
 
-type Issue = { code: string; severity: string; message: string; recommendation: string };
-type Result = {
-  sku: string;
-  title: string;
-  score: number;
-  seoScore: number;
-  aeoScore: number;
-  status: string;
-  issues: Issue[];
-  suggestedTitle: string;
-  suggestedIntro: string;
-  suggestedMeta: string;
-  suggestedAlt: string;
+type Neighbor = { rowIndex: number; sku: string; similarity: number };
+type AIResult = {
+  rowIndex: number; sku: string;
+  decisions: { status: string; error?: string; imageWarning?: string; checks?: { name: string; assessment: string; confidence: number | null; needsReview: boolean }[] };
+  embeddings: { status: string; error?: string; imageError?: string; imageStatus?: string; imageTextSimilarity?: number | null; textNeighbors?: Neighbor[]; imageNeighbors?: Neighbor[] };
 };
-
+type Job = { id: string; status: string; total: number; completed: number; results: AIResult[]; error?: string; warnings?: string[] };
+type Capabilities = { decisions: { configured: boolean }; embeddings: { configured: boolean; state: string } };
 const SAMPLE = `sku,product_url,title_en,title_ar,brand,model_number,category,price_aed,currency,stock_status,description_en,image_url_1,image_alt_1,meta_title,meta_description,specs_inline
-FEPY-PW-001,https://www.fepy.com/power-tools/bosch-easyaquatak-120,Bosch EasyAquatak 120 High-Pressure Washer 1500W,,Bosch,06008A7971,Power Tools,370,AED,in_stock,Bosch EasyAquatak 120 is a 1500W pressure washer for small to medium outdoor cleaning jobs. It includes a 5m hose.,https://cdn.fepy.com/samples/easyaquatak-120.jpg,Bosch EasyAquatak 120 pressure washer,Bosch EasyAquatak 120 1500W,1500W pressure washer with 5m hose for outdoor cleaning in the UAE.,wattage: 1500W | hose_length: 5m
+FEPY-PW-001,https://www.fepy.com/power-tools/bosch-easyaquatak-120,Bosch EasyAquatak 120 High-Pressure Washer 1500W,,Bosch,06008A7971,Power Tools,370,AED,in_stock,Bosch EasyAquatak 120 is a 1500W pressure washer for small to medium outdoor cleaning jobs. It includes a 5m hose.,,,Bosch EasyAquatak 120 1500W,1500W pressure washer with 5m hose for outdoor cleaning in the UAE.,wattage: 1500W | hose_length: 5m
 FEPY-HW-220,https://www.fepy.com/pattex-silicone-sealant-sl212,Pattex Silicone Sealant SL212 280ml Transparent,,Pattex,SL212,Construction Chemicals,11.25,AED,in_stock,General purpose silicone sealant.,,,Pattex SL212 sealant,,`;
-
-function parseCsv(input: string) {
-  const lines = input.trim().split(/\r?\n/).filter(Boolean);
-  const headers = lines[0].split(",").map((cell) => cell.trim());
-  return lines.slice(1).map((line) => {
-    const cells = line.split(",");
-    return Object.fromEntries(headers.map((header, index) => [header, cells[index]?.trim() || ""]));
-  });
+const labels: Record<string, string> = { content_consistency: "Product facts agree", description_quality: "Description usefulness", category_fit: "Category fit", image_match: "Image matches product" };
+function readable(value: string) { return value.replace(/_/g, " "); }
+function reviewNeeded(ai?: AIResult) {
+  return !!ai && (ai.decisions.status === "error" || ai.decisions.status === "not_configured" || !!ai.decisions.imageWarning || !!ai.decisions.checks?.some(c => c.needsReview) || ai.embeddings.status === "error" || !!ai.embeddings.imageError || !!ai.embeddings.textNeighbors?.length || !!ai.embeddings.imageNeighbors?.length);
 }
 
 export default function CatalogPage() {
   const [csv, setCsv] = useState(SAMPLE);
-  const [results, setResults] = useState<Result[]>([]);
+  const [results, setResults] = useState<CatalogAudit[]>([]);
   const [summary, setSummary] = useState<{ total: number; pass: number; review: number; fail: number } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("all");
-  const shown = useMemo(() => results.filter((row) => filter === "all" || row.status === filter), [results, filter]);
+  const [useDecisions, setUseDecisions] = useState(true);
+  const [useEmbeddings, setUseEmbeddings] = useState(true);
+  const [job, setJob] = useState<Job | null>(null);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [setupMessage, setSetupMessage] = useState("");
+  const [reviewed, setReviewed] = useState<number[]>([]);
+  const [sourceRows, setSourceRows] = useState<Record<string, string>[]>([]);
+  const [pollError, setPollError] = useState("");
+  const running = job?.status === "queued" || job?.status === "running";
 
-  async function runAudit() {
-    setError("");
-    setBusy(true);
-    const response = await fetch("/api/catalog-audit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: parseCsv(csv) }),
-    });
-    const data = await response.json();
-    setBusy(false);
-    if (!response.ok) {
-      setError(data.error || "Audit failed");
-      return;
+  useEffect(() => {
+    const abort = new AbortController();
+    fetch("/api/catalog-ai", { signal: abort.signal }).then(async response => {
+      const data = await response.json();
+      if (!response.ok) setSetupMessage(data.error || data.detail || "AI checks are unavailable.");
+      else setCapabilities(data);
+    }).catch(() => { if (!abort.signal.aborted) setSetupMessage("Could not check AI availability."); });
+    return () => abort.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!job?.id || !running) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const abort = new AbortController();
+    async function poll() {
+      try {
+        const response = await fetch(`/api/catalog-ai/${job!.id}`, { signal: abort.signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || data.detail || "Could not refresh audit progress.");
+        if (cancelled) return;
+        setJob(data); setPollError("");
+        if (data.status === "failed") setError(data.error || "AI audit failed.");
+        if (data.status === "queued" || data.status === "running") timer = setTimeout(poll, 2500);
+      } catch (err) {
+        if (!cancelled) { setPollError(err instanceof Error ? err.message : "Progress refresh failed."); timer = setTimeout(poll, 8000); }
+      }
     }
-    setSummary(data.summary);
-    setResults(data.results);
+    timer = setTimeout(poll, 1500);
+    return () => { cancelled = true; clearTimeout(timer); abort.abort(); };
+  }, [job?.id, running]);
+
+  const aiByIndex = useMemo(() => new Map(job?.results.map(row => [row.rowIndex, row]) || []), [job?.results]);
+  const shown = useMemo(() => results.map((row, index) => ({ row, index, ai: aiByIndex.get(index) })).filter(({ row, ai }) => filter === "all" || (filter === "ai_review" ? reviewNeeded(ai) : row.status === filter)), [results, filter, aiByIndex]);
+
+  async function runAudit(withAI: boolean) {
+    setError(""); setPollError(""); setBusy(true); setJob(null); setReviewed([]); setResults([]); setSummary(null);
+    try {
+      const rows = parseCsv(csv);
+      if (rows.length > 5000) throw new Error("Use up to 5,000 rows for the rules audit.");
+      if (withAI && rows.length > 500) throw new Error("Use up to 500 products per AI audit. Split larger exports into batches or run rules only.");
+      if (withAI && !useDecisions && !useEmbeddings) throw new Error("Select at least one AI check.");
+      setSourceRows(rows);
+      const response = await fetch("/api/catalog-audit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Rules audit failed.");
+      setSummary(data.summary); setResults(data.results);
+      if (withAI) {
+        const aiResponse = await fetch("/api/catalog-ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows, decisions: useDecisions, embeddings: useEmbeddings }) });
+        const aiData = await aiResponse.json();
+        if (!aiResponse.ok) throw new Error(aiData.error || aiData.detail || "AI audit could not start. Rules results remain available.");
+        setJob({ ...aiData, completed: 0, results: [] });
+      }
+    } catch (err) { setError(err instanceof Error ? err.message : "Audit failed. Please retry."); }
+    finally { setBusy(false); }
+  }
+
+  function download() {
+    const report = { exportedAt: new Date().toISOString(), summary, aiJob: job, products: results.map((row, index) => ({ source: sourceRows[index], rules: row, ai: aiByIndex.get(index) || null, manuallyReviewed: reviewed.includes(index) })) };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = "fepy-catalog-audit.json"; link.click(); URL.revokeObjectURL(url);
   }
 
   return (
-    <main style={{ maxWidth: 1080, margin: "0 auto", padding: "32px 20px 64px", color: "#302E2C", fontFamily: "Georgia, serif" }}>
-      <p style={{ letterSpacing: 3, fontSize: 12, color: "#956B43" }}>FEPY CATALOG</p>
-      <h1 style={{ fontSize: 42, fontWeight: 500, margin: "8px 0" }}>PDP auditor</h1>
-      <p style={{ maxWidth: 640, lineHeight: 1.5 }}>Paste the developer export as CSV. Each row is scored for missing data, SEO, and answer-engine readiness. Corrections stay here until someone accepts them.</p>
-      <textarea value={csv} onChange={(event) => setCsv(event.target.value)} rows={8} style={{ width: "100%", marginTop: 16, padding: 12, border: "1px solid #e6d7c3", background: "#fff", fontFamily: "ui-monospace, monospace", fontSize: 12 }} />
-      <button onClick={runAudit} disabled={busy} style={{ marginTop: 12, background: "#302E2C", color: "#F8D798", border: 0, padding: "12px 18px", cursor: "pointer" }}>{busy ? "Scoring…" : "Run audit"}</button>
-      {error && <p>{error}</p>}
-      {summary && (
-        <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 24 }}>
-          {[["Rows", summary.total], ["Pass", summary.pass], ["Review", summary.review], ["Fail", summary.fail]].map(([label, value]) => (
-            <div key={String(label)} style={{ background: "#fff", border: "1px solid #e6d7c3", padding: 16 }}>
-              <div style={{ fontSize: 12, letterSpacing: 1 }}>{label}</div>
-              <div style={{ fontSize: 28 }}>{value}</div>
-            </div>
-          ))}
-        </section>
-      )}
-      {results.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          {["all", "fail", "review", "pass"].map((item) => (
-            <button key={item} onClick={() => setFilter(item)} style={{ marginRight: 8, padding: "6px 10px", border: "1px solid #CB9658", background: filter === item ? "#F8D798" : "#fff" }}>{item}</button>
-          ))}
+    <main className="mx-auto max-w-6xl px-5 py-8 text-stone-800">
+      <p className="text-xs tracking-[.25em] text-amber-800">FEPY CATALOG</p>
+      <h1 className="mt-2 font-serif text-4xl">PDP auditor</h1>
+      <p className="mt-3 max-w-3xl text-sm leading-6">Review product facts, search readiness, image matching, and possible duplicates. AI findings require review. This tool does not change your catalogue.</p>
+      <section className="mt-6 rounded-xl border border-stone-200 bg-white p-5">
+        <label htmlFor="catalog-csv" className="block font-medium">Product export CSV</label>
+        <p className="mt-1 text-xs text-stone-500">Quoted commas and multiline descriptions are supported. AI checks: up to 500 rows. Rules only: up to 5,000.</p>
+        <input aria-label="Upload catalogue CSV" type="file" accept=".csv,text/csv" className="my-3 block text-sm" disabled={busy || running} onChange={async event => { const file = event.target.files?.[0]; if (file) { if (file.size > 10 * 1024 * 1024) { setError("CSV exceeds 10 MB."); return; } setCsv(await file.text()); } }} />
+        <textarea id="catalog-csv" value={csv} disabled={busy || running} onChange={event => setCsv(event.target.value)} rows={7} className="w-full rounded border border-stone-300 p-3 font-mono text-xs" />
+        <div className="mt-4 flex flex-wrap gap-5 text-sm">
+          <label><input type="checkbox" checked={useDecisions} disabled={busy || running} onChange={e => setUseDecisions(e.target.checked)} className="mr-2" />Content & image decisions</label>
+          <label><input type="checkbox" checked={useEmbeddings} disabled={busy || running} onChange={e => setUseEmbeddings(e.target.checked)} className="mr-2" />Image similarity & duplicate candidates</label>
         </div>
-      )}
-      {shown.map((row) => (
-        <article key={row.sku} style={{ background: "#fff", border: "1px solid #e6d7c3", padding: 18, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <h2 style={{ margin: 0, fontSize: 22 }}>{row.sku}</h2>
-            <strong>{row.status} · {row.score}</strong>
-          </div>
-          <p>{row.title || "No English title"}</p>
-          <p>SEO {row.seoScore} · AEO {row.aeoScore}</p>
-          <ul>{row.issues.map((issue) => <li key={issue.code}><strong>{issue.message}</strong> {issue.recommendation}</li>)}</ul>
-          <p><strong>Suggested title:</strong> {row.suggestedTitle}</p>
-          <p><strong>Suggested intro:</strong> {row.suggestedIntro}</p>
-          <p><strong>Suggested meta:</strong> {row.suggestedMeta}</p>
-          <p><strong>Suggested alt:</strong> {row.suggestedAlt}</p>
-        </article>
-      ))}
+        <p className="mt-2 text-xs text-stone-500">Selected AI checks send product data to the audit worker. Content and image decisions use OpenAI; similarity runs on the worker.</p>
+        {setupMessage && <p role="status" className="mt-3 text-sm text-amber-800">{setupMessage} You can still run rules only.</p>}
+        {capabilities && <p className="mt-3 text-xs text-stone-500">Decisions API: {capabilities.decisions.configured ? "configured" : "awaiting OpenAI API key"} · EmbeddingGemma 2: {readable(capabilities.embeddings.state)}. The first similarity audit may take longer while the model loads.</p>}
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button disabled={busy || running} onClick={() => runAudit(true)} className="rounded bg-stone-800 px-5 py-3 text-sm text-amber-100 disabled:opacity-50">{busy ? "Starting…" : running ? "AI audit running…" : "Run rules + selected AI checks"}</button>
+          <button disabled={busy || running} onClick={() => runAudit(false)} className="rounded border border-stone-300 px-5 py-3 text-sm disabled:opacity-50">Run rules only</button>
+          {results.length > 0 && <button onClick={download} className="rounded border border-stone-300 px-5 py-3 text-sm">Download results</button>}
+        </div>
+      </section>
+      {error && <p role="alert" className="mt-4 rounded bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+      {job && <section aria-live="polite" className="mt-4 rounded bg-amber-50 p-4 text-sm"><p>AI audit: {readable(job.status)} · {job.completed}/{job.total} products checked</p><progress className="mt-2 w-full" max={job.total} value={job.completed} aria-label="AI audit progress" /><p className="mt-2 text-xs">Keep this page open to receive results. Audit results are available on the worker for 24 hours; download them to keep a copy.</p>{pollError && <p className="mt-2 text-red-800">{pollError} Retrying progress refresh…</p>}</section>}
+      {summary && <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">{[["Rows", summary.total], ["Rules pass", summary.pass], ["Rules review", summary.review], ["Rules fail", summary.fail]].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-stone-200 bg-white p-4"><p className="text-xs text-stone-500">{label}</p><p className="mt-1 text-3xl">{value}</p></div>)}</section>}
+      {results.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{["all", "fail", "review", "pass", "ai_review"].map(item => <button key={item} aria-pressed={filter === item} onClick={() => setFilter(item)} className={`rounded border px-3 py-2 text-sm ${filter === item ? "border-amber-500 bg-amber-100" : "border-stone-200 bg-white"}`}>{item === "ai_review" ? "AI needs review" : readable(item)}</button>)}</div>}
+      {shown.map(({ row, index, ai }) => <article key={index} className="mt-4 rounded-xl border border-stone-200 bg-white p-5">
+        <div className="flex flex-wrap justify-between gap-3"><h2 className="font-serif text-xl">{row.sku}</h2><strong className="text-sm">Rules: {row.status} · {row.score}/100</strong></div>
+        <p className="mt-2">{row.title || "No English title"}</p><p className="mt-1 text-xs text-stone-500">SEO checklist {row.seoScore} · AEO checklist {row.aeoScore}</p>
+        {ai && <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <section className="rounded-lg bg-stone-50 p-4"><h3 className="text-sm font-semibold">Content & image decisions</h3><p className="mt-1 text-xs">{readable(ai.decisions.status)}</p>{ai.decisions.error && <p className="mt-2 text-sm text-amber-800">{ai.decisions.error}</p>}{ai.decisions.imageWarning && <p className="mt-2 text-xs text-amber-800">{ai.decisions.imageWarning}</p>}{ai.decisions.checks?.map(check => <div key={check.name} className="mt-3 text-sm"><p className="font-medium">{labels[check.name] || readable(check.name)}</p><p>{readable(check.assessment)} {check.confidence !== null && `· confidence ${Math.round(check.confidence * 100)}%`}</p>{check.needsReview && <span className="text-xs text-amber-800">Manual review required</span>}</div>)}</section>
+          <section className="rounded-lg bg-stone-50 p-4"><h3 className="text-sm font-semibold">Image similarity & duplicate candidates</h3><p className="mt-1 text-xs">{readable(ai.embeddings.status)}</p>{ai.embeddings.error && <p className="mt-2 text-sm text-amber-800">{ai.embeddings.error}</p>}{ai.embeddings.imageError && <p className="mt-2 text-xs text-amber-800">{ai.embeddings.imageError}</p>}{ai.embeddings.imageStatus === "not_supplied" && <p className="mt-2 text-xs">No primary image supplied.</p>}{ai.embeddings.imageTextSimilarity != null && <p className="mt-2 text-sm">Image/title cosine similarity: {ai.embeddings.imageTextSimilarity.toFixed(3)}<span className="block text-xs text-stone-500">A similarity signal, not a match probability.</span></p>}{([['Similar text', ai.embeddings.textNeighbors], ['Similar images', ai.embeddings.imageNeighbors]] as [string, Neighbor[] | undefined][]).map(([label, neighbors]) => <div key={label} className="mt-3 text-sm"><p className="font-medium">{label}</p>{neighbors?.length ? neighbors.map(n => <p key={n.rowIndex}>{n.sku || `Row ${n.rowIndex + 1}`} · {n.similarity.toFixed(3)}</p>) : <p className="text-xs text-stone-500">{ai.embeddings.status === "completed" ? (running ? "Comparisons pending until all rows finish." : "No candidates above the review threshold within this upload.") : "Not evaluated."}</p>}</div>)}<p className="mt-3 text-xs text-stone-500">Verify model, size, colour and pack quantity before merging any products.</p></section>
+        </div>}
+        <details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Rules findings and correction drafts ({row.issues.length})</summary><ul className="mt-3 list-disc space-y-2 pl-5 text-sm">{row.issues.map(issue => <li key={issue.code}><strong>{issue.message}</strong> {issue.recommendation}</li>)}</ul><div className="mt-4 space-y-2 text-sm"><p><strong>Title draft:</strong> {row.suggestedTitle}</p><p><strong>Intro draft:</strong> {row.suggestedIntro}</p><p><strong>Meta draft:</strong> {row.suggestedMeta}</p><p><strong>Alt draft:</strong> {row.suggestedAlt}</p><p className="text-xs text-stone-500">Drafts use supplied fields. Validate every fact before publication.</p></div></details>
+        <button className="mt-4 rounded border border-stone-300 px-3 py-2 text-xs" disabled={running} onClick={() => setReviewed(prev => prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index])}>{reviewed.includes(index) ? "Reviewed · undo" : "Mark manually reviewed"}</button>
+      </article>)}
+      {results.length > 0 && shown.length === 0 && <p className="mt-5 text-sm text-stone-500">No products match this filter.</p>}
     </main>
   );
 }
