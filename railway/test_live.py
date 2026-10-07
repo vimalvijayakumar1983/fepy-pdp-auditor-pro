@@ -47,6 +47,17 @@ class LiveTests(unittest.TestCase):
         self.assertIn('not a full usability',question['instructions'])
         self.assertIn('mobile first-viewport',payload['input'][0]['content'][1]['text'])
 
+    def test_speed_conflict_and_power_review_are_concrete(self):
+        data={'canonical':'https://fepy.com/p','h1Count':1,'productSchema':True,'schemaModel':'','row':{'title_en':'Bosch Cordless Drill','model_number':'GSB 18V-50 + 06019H51L0','specs_inline':'No Load Speed: 0 – 2,500 / 0 rpm | Power Input: 710W | Battery Voltage: 18V','faq_text':'What is the no-load speed? First gear is 0 to 460 rpm, second reaches 1,800 rpm.'}}
+        found={f['code']:f for f in live_pdp.technical_findings(data,'https://fepy.com/p')}
+        self.assertIn('2,500', found['speed_conflict']['evidence'])
+        self.assertIn('1,800', found['speed_conflict']['evidence'])
+        self.assertIn('710W', found['cordless_power_review']['evidence'])
+        self.assertIn('not proof', found['cordless_power_review']['action'])
+        self.assertIn('schema_model_missing', found)
+        data['row']['specs_inline']='No Load Speed: 0 – 460 / 0 – 1,800 rpm'
+        self.assertNotIn('speed_conflict',{f['code'] for f in live_pdp.technical_findings(data,'https://fepy.com/p')})
+
     def test_weight_conflict_requires_supplier_verification(self):
         data={'canonical':'https://fepy.com/p','h1Count':1,'productSchema':True,'row':{'description_en':'Weighing only 1.7 kg','specs_inline':'Weight: 3.44 kg | Voltage: 18V'}}
         finding=live_pdp.technical_findings(data,'https://fepy.com/p')[0]

@@ -64,11 +64,19 @@ EXTRACT = r'''() => {
  const h1 = [...document.querySelectorAll('h1')].map(x => clean(x.innerText)).filter(Boolean);
  const availability = String(offer?.availability || attr('[itemprop="availability"]', 'href'));
  const brand = typeof product?.brand === 'string' ? product.brand : product?.brand?.name || '';
- const category = clean(document.querySelector('[aria-label="breadcrumb"] a:last-of-type')?.innerText) || product?.category || (breadcrumbs?.itemListElement || []).slice(-2,-1).map(x => x.name || x.item?.name || '').join('');
+ const usableCategory = x => x && !/^(home|homepage|all products|products)$/i.test(x) && !h1.includes(x) && x !== clean(product?.name);
+ const crumbLinks = [...document.querySelectorAll('[aria-label="breadcrumb"] a, [aria-label="Breadcrumb"] a, nav[class*="breadcrumb"] a, [class*="Breadcrumb"] a')].map(x=>clean(x.innerText)).filter(usableCategory);
+ const schemaCrumbs = [...(breadcrumbs?.itemListElement || [])].sort((a,b)=>Number(a.position || 0)-Number(b.position || 0)).map(x=>clean(x.name || x.item?.name)).filter(usableCategory);
+ const category = crumbLinks.at(-1) || (usableCategory(clean(product?.category)) ? clean(product.category) : '') || schemaCrumbs.at(-1) || '';
+ const modelSpec = specs.find(x=>/^(model no\.?|model number|model):/i.test(x));
+ const model = clean(product?.model || product?.mpn) || (modelSpec ? modelSpec.slice(modelSpec.indexOf(':')+1).trim() : '');
+ let faq = [...document.querySelectorAll('#faq, #faqs, #frequently-asked-questions, [id*="faq"], [id*="FAQ"]')].map(x=>clean(x.innerText)).filter(Boolean).join(' ');
+ if (!faq) { const fullText = clean(document.body?.innerText); const begin=fullText.indexOf('Frequently Asked Questions'); if(begin>=0) faq=fullText.slice(begin).split(/Ratings & Reviews|Customer Reviews|Related Products/)[0]; }
+ faq = faq.slice(0,6000);
  return JSON.stringify({
-  row: { sku: clean(product?.sku || product?.productID || txt('[itemprop="sku"]')), product_url: location.href, title_en: h1[0] || clean(product?.name), title_ar: document.documentElement.lang?.startsWith('ar') ? h1[0] : '', brand: clean(brand), model_number: clean(product?.model || product?.mpn), category: clean(category), price_aed: clean(offer?.price || attr('[itemprop="price"]','content')), currency: clean(offer?.priceCurrency || attr('[itemprop="priceCurrency"]','content')), stock_status: availability.endsWith('InStock') ? 'in_stock' : availability.endsWith('OutOfStock') ? 'out_of_stock' : availability.endsWith('BackOrder') ? 'backorder' : '', description_en: description.slice(0,8000), image_url_1: image, image_alt_1: clean(imageElement?.alt), meta_title: document.title, meta_description: meta('description'), specs_inline: [...new Set(specs)].join(' | ').slice(0,8000) },
-  title: document.title, canonical: attr('link[rel="canonical"]','href'), robots: meta('robots'), h1Count: h1.length, productSchema: !!product, pdpSections: !!document.querySelector('#features-benefits, #key-specifications'), malformedSchema, schemaProductName: clean(product?.name), schemaSku: clean(product?.sku), schemaCurrency: clean(offer?.priceCurrency), schemaAvailability: availability, imageUrls: images, bodyPreview: body,
-  sources: { title_en: 'rendered H1 / Product schema fallback', description_en: (txt('#features-benefits') || descriptionSelectors.some(selector => txt(selector))) ? 'rendered Features & Benefits / product description' : product?.description ? 'Product schema description' : 'not found', specs_inline: 'rendered Key Specifications / Product additionalProperty fallback', price_aed: 'Product Offer schema / itemprop', brand: 'Product schema', model_number: 'Product schema model / mpn', image_url_1: 'product gallery / Product schema', meta_title: 'document title', meta_description: 'meta description' }
+  row: { sku: clean(product?.sku || product?.productID || txt('[itemprop="sku"]')), product_url: location.href, title_en: h1[0] || clean(product?.name), title_ar: document.documentElement.lang?.startsWith('ar') ? h1[0] : '', brand: clean(brand), model_number: model, category: clean(category), price_aed: clean(offer?.price || attr('[itemprop="price"]','content')), currency: clean(offer?.priceCurrency || attr('[itemprop="priceCurrency"]','content')), stock_status: availability.endsWith('InStock') ? 'in_stock' : availability.endsWith('OutOfStock') ? 'out_of_stock' : availability.endsWith('BackOrder') ? 'backorder' : '', description_en: description.slice(0,8000), image_url_1: image, image_alt_1: clean(imageElement?.alt), meta_title: document.title, meta_description: meta('description'), faq_text: faq, specs_inline: [...new Set(specs)].join(' | ').slice(0,8000) },
+  title: document.title, canonical: attr('link[rel="canonical"]','href'), robots: meta('robots'), h1Count: h1.length, productSchema: !!product, pdpSections: !!document.querySelector('#features-benefits, #key-specifications'), malformedSchema, schemaModel: clean(product?.model || product?.mpn), schemaProductName: clean(product?.name), schemaSku: clean(product?.sku), schemaCurrency: clean(offer?.priceCurrency), schemaAvailability: availability, imageUrls: images, bodyPreview: body,
+  sources: { title_en: 'rendered H1 / Product schema fallback', description_en: (txt('#features-benefits') || descriptionSelectors.some(selector => txt(selector))) ? 'rendered Features & Benefits / product description' : product?.description ? 'Product schema description' : 'not found', specs_inline: 'rendered Key Specifications / Product additionalProperty fallback', price_aed: 'Product Offer schema / itemprop', brand: 'Product schema', category: crumbLinks.length ? 'rendered breadcrumb links' : 'Product category / BreadcrumbList schema', model_number: clean(product?.model || product?.mpn) ? 'Product schema model / mpn' : modelSpec ? 'rendered Model No specification' : 'not found', faq_text: 'rendered FAQ section', image_url_1: 'product gallery / Product schema', meta_title: 'document title', meta_description: 'meta description' }
  });
 }'''
 
@@ -97,6 +105,24 @@ def technical_findings(data, requested_url):
     def add(code, severity, finding, evidence, action):
         findings.append(dict(code=code, severity=severity, finding=finding, evidence=evidence, action=action))
     row = data.get("row", {})
+    specs = row.get("specs_inline", "")
+    faq = row.get("faq_text", "")
+    speed = re.search(r"(?:^|\|)\s*No[- ]Load Speed:\s*([^|]+)", specs, re.I)
+    faq_speed = re.search(r"(?:no[- ]load speed|first gear).{0,400}", faq, re.I)
+    def speed_limits(text):
+        ranged = re.findall(r"\d[\d,]*\s*(?:to|[–—-])\s*(\d[\d,]*)", text, re.I)
+        rpm = re.findall(r"(\d[\d,]*)\s*rpm", text, re.I)
+        return {int(value.replace(',', '')) for value in ranged + rpm if int(value.replace(',', '')) > 0}
+    if speed and faq_speed:
+        spec_values, faq_values = speed_limits(speed.group(1)), speed_limits(faq_speed.group())
+        if spec_values and faq_values and spec_values != faq_values:
+            add("speed_conflict", "high", "No-load speed conflicts between specifications and FAQ", f"Specifications: {speed.group(1).strip()}; FAQ: {faq_speed.group().strip()}", "Verify the exact model and kit against its manufacturer manual. Publish the same verified first-gear and second-gear speeds in the facts table, FAQ and structured data. Consistent facts help search engines and AI answers interpret the product; this does not guarantee rankings.")
+    watts = re.search(r"(?:^|\|)\s*Power Input:\s*([0-9.]+)\s*W\b", specs, re.I)
+    voltage = re.search(r"(?:^|\|)\s*Battery Voltage:\s*([0-9.]+)\s*V\b", specs, re.I)
+    if watts and voltage and re.search(r"cordless|battery", row.get("title_en", ""), re.I):
+        add("cordless_power_review", "review", "Verify the wattage listed for this cordless product", f"Power Input: {watts.group(1)}W; Battery Voltage: {voltage.group(1)}V", "A wattage figure alone is not proof of an error. Confirm what it measures using the exact manufacturer's documentation; label it clearly or remove it if unsupported. Keep verified voltage and kit contents consistent across the page and feeds.")
+    if row.get("model_number") and "schemaModel" in data and not data["schemaModel"]:
+        add("schema_model_missing", "review", "Visible model number is absent from Product model/MPN fields", f"Visible specification: {row['model_number']}; Product model/mpn: not found", "Add the verified model and manufacturer part number to the appropriate Product structured-data fields, matching the visible product. This improves machine-readable product identification; rich results and AI rankings are not guaranteed.")
     weight = re.search(r"(?:^|\|)\s*Weight:\s*([0-9.]+)\s*kg\b", row.get("specs_inline", ""), re.I)
     feature_weights = re.findall(r"([0-9.]+)\s*kg\b", row.get("description_en", ""), re.I)
     if weight and any(float(value) != float(weight.group(1)) for value in feature_weights):
@@ -140,7 +166,7 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
         if not initial.get("productSchema") and not (initial.get("pdpSections") and initial.get("h1Count") == 1):
             raise ValueError("Product JSON-LD was not found. This URL may be a category, error page, or unsupported PDP; it was not treated as a product.")
         # Only known read-only product section toggles. No general autonomous agent or form actions.
-        for selector in ['[role="tab"]', '.product.data.items .data.item.title a', '[data-testid="product-description-toggle"]', '#full-details button']:
+        for selector in ([] if initial.get('pdpSections') else ['[role="tab"]', '.product.data.items .data.item.title a', '[data-testid="product-description-toggle"]', '#full-details button']):
             for element in (await page.get_elements_by_css_selector(selector))[:8]:
                 label = str(await element.evaluate("() => this.textContent")).lower()
                 if any(word in label for word in ["description", "specification", "details", "additional information", "features & benefits"]):

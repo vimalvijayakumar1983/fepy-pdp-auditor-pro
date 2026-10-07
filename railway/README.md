@@ -53,3 +53,11 @@ Set `BROWSER_USE_API_KEY` privately on the Railway worker. `/browser-sessions` G
 A maximum of two active sessions is allowed by this worker. Creation requests are not automatically retried or switched to another country. The UI reports that UAE routing was requested; egress IP location has not been independently verified. Browser Use browser/proxy charges apply. Stop sessions when finished; closing the app does not stop billing before the timeout.
 
 After the FEPY site administrator permits the auditor, set `FEPY_AUDITOR_ACCESS_APPROVED=true`. Only then may `/live-jobs` receive a `browserSessionId` to attach the existing collector to the same Cloud browser shown in the panel. A new network route must not be used to evade the known FEPY checkpoint. The panel starts blank and performs no automatic FEPY navigation. While collection runs, manual control is disabled locally to avoid changing evidence mid-audit.
+
+## Findings and response time
+
+The collector reads every linked breadcrumb instead of CSS `a:last-of-type` (which matched Home inside its own list item). Model/MPN uses Product schema first, then the visible Model No specification, with source labels. FAQ text is supplied to Decisions. Deterministic findings expose the exact FAQ/specification RPM disagreement and review a wattage entry alongside battery voltage without asserting an unverified manufacturer correction. Missing Product model/MPN fields are distinct from a missing visible model.
+
+Live audits default to page evidence plus Decisions; image similarity can be selected explicitly. Findings are published as soon as page evidence arrives and retained during assessment. Decisions finishes and is saved before optional EmbeddingGemma loading/inference. Per-product timing records separate image fetch, Decisions and similarity; browser collection time remains in page evidence. Visible FEPY sections skip unnecessary legacy tab enumeration. No browser data is reused as fresh evidence.
+
+`node tests/live-extract.test.cjs` checks extraction against HTML fixtures with a DOM adapter; it does not launch a real browser. Python tests verify exact finding evidence and that Decisions/page results are readable while similarity runs.

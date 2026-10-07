@@ -24,6 +24,22 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(client.post('/jobs', headers=AUTH, json={'rows': [{}] * 501}).status_code, 422)
         self.assertEqual(client.post('/jobs', headers=AUTH, json={'rows': [{}], 'decisions': False, 'embeddings': False}).status_code, 400)
 
+    def test_decisions_visible_before_similarity(self):
+        row=worker.clean_row({'sku':'A','title_en':'Cordless drill','faq_text':'FAQ evidence'})
+        page={'status':'completed','extracted':row,'technical':[]}
+        def embed(*args):
+            partial=worker.get_job('early-test')
+            self.assertEqual(partial['results'][0]['decisions']['status'],'completed')
+            self.assertEqual(partial['results'][0]['live']['status'],'completed')
+            self.assertEqual(partial['phase'],'image_similarity')
+            return [1/(768**.5)]*768
+        with patch.object(worker,'decisions',return_value={'status':'completed','checks':[]}), patch.object(worker,'embedding',side_effect=embed):
+            worker.run_job('early-test',[row],True,True,[page])
+        result=worker.get_job('early-test')
+        self.assertEqual(result['status'],'completed')
+        self.assertIn('similaritySeconds',result['results'][0]['timings'])
+        self.assertIn('FAQ evidence',str(worker.decision_payload(row)))
+
     def test_missing_key_is_not_a_pass(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': ''}):
             self.assertEqual(worker.decisions(worker.clean_row({'sku': 'A'}))['status'], 'not_configured')

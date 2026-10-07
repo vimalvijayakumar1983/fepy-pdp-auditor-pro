@@ -10,16 +10,17 @@ import type { CatalogAudit } from "@/lib/catalogAudit";
 
 type Neighbor = { rowIndex: number; sku: string; similarity: number };
 type AIResult = {
-  rowIndex: number; sku: string; live?: LivePage;
+  rowIndex: number; sku: string; live?: LivePage; timings?: {imageFetchSeconds?:number;decisionsSeconds?:number;similaritySeconds?:number};
   decisions: { status: string; error?: string; imageWarning?: string; checks?: { name: string; assessment: string; confidence: number | null; needsReview: boolean }[] };
   embeddings: { status: string; error?: string; imageError?: string; imageStatus?: string; imageTextSimilarity?: number | null; textNeighbors?: Neighbor[]; imageNeighbors?: Neighbor[] };
 };
-type Job = { mode?: string; phase?: string; pagesCompleted?: number; pagesSkipped?: number; id: string; status: string; total: number; completed: number; results: AIResult[]; error?: string; warnings?: string[] };
+type Job = { assessmentSeconds?:number; mode?: string; phase?: string; pagesCompleted?: number; pagesSkipped?: number; id: string; status: string; total: number; completed: number; results: AIResult[]; error?: string; warnings?: string[] };
 type Capabilities = { decisions: { configured: boolean }; embeddings: { configured: boolean; state: string } };
 const SAMPLE = `sku,product_url,title_en,title_ar,brand,model_number,category,price_aed,currency,stock_status,description_en,image_url_1,image_alt_1,meta_title,meta_description,specs_inline
 FEPY-PW-001,https://www.fepy.com/power-tools/bosch-easyaquatak-120,Bosch EasyAquatak 120 High-Pressure Washer 1500W,,Bosch,06008A7971,Power Tools,370,AED,in_stock,Bosch EasyAquatak 120 is a 1500W pressure washer for small to medium outdoor cleaning jobs. It includes a 5m hose.,,,Bosch EasyAquatak 120 1500W,1500W pressure washer with 5m hose for outdoor cleaning in the UAE.,wattage: 1500W | hose_length: 5m
 FEPY-HW-220,https://www.fepy.com/pattex-silicone-sealant-sl212,Pattex Silicone Sealant SL212 280ml Transparent,,Pattex,SL212,Construction Chemicals,11.25,AED,in_stock,General purpose silicone sealant.,,,Pattex SL212 sealant,,`;
 const labels: Record<string, string> = { content_consistency: "Product facts agree", description_quality: "Description usefulness", category_fit: "Category fit", image_match: "Image matches product", desktop_first_view: "Desktop first viewport", mobile_first_view: "Mobile first viewport" };
+function timing(value: number | undefined) { return value === undefined ? "pending" : `${value}s`; }
 function readable(value: string) { return value.replace(/_/g, " "); }
 function reviewNeeded(ai?: AIResult) {
   return !!ai && (!!ai.live?.technical?.length || ai.live?.status === "error" || ai.decisions.status === "error" || ai.decisions.status === "not_configured" || !!ai.decisions.imageWarning || !!ai.decisions.checks?.some(c => c.needsReview) || ai.embeddings.status === "error" || !!ai.embeddings.imageError || !!ai.embeddings.textNeighbors?.length || !!ai.embeddings.imageNeighbors?.length);
@@ -53,6 +54,7 @@ export default function CatalogPage() {
   const [filter, setFilter] = useState("all");
   const [useDecisions, setUseDecisions] = useState(true);
   const [useEmbeddings, setUseEmbeddings] = useState(true);
+  const [liveEmbeddings, setLiveEmbeddings] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [setupMessage, setSetupMessage] = useState("");
@@ -89,6 +91,7 @@ export default function CatalogPage() {
           pages.forEach(item=>{sources[item.rowIndex] = item.live!.extracted || {};});
           setSourceRows(sources);
           const audits = auditCatalog(sources, {checkArabic:false});
+          pages.forEach(item=>{const audit=audits.results[item.rowIndex];if(audit.status === "pass" && item.live?.technical?.length) audit.status="review";});
           setResults(audits.results);
           const valid = pages.map(item=>audits.results[item.rowIndex]);
           setSummary({total:valid.length,pass:valid.filter(x=>x.status==="pass").length,review:valid.filter(x=>x.status==="review").length,fail:valid.filter(x=>x.status==="fail").length});
@@ -134,7 +137,7 @@ export default function CatalogPage() {
       const pages = [...new Set(urls.split(/\s+/).map(x=>x.trim()).filter(Boolean))];
       if (!pages.length || pages.length > 100) throw new Error("Enter 1–100 FEPY product URLs, one per line.");
       if (browserSession && (!browserApproved || browserSession.status!=="active")) throw new Error("The live UAE browser is not ready for automated FEPY audits. Review its access and status message.");
-      const response = await fetch("/api/catalog-live", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls:pages,browserSessionId:browserSession?.id,decisions:useDecisions,embeddings:useEmbeddings})});
+      const response = await fetch("/api/catalog-live", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls:pages,browserSessionId:browserSession?.id,decisions:useDecisions,embeddings:liveEmbeddings})});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || data.detail || "Live audit could not start.");
       setJob(data);
@@ -164,8 +167,9 @@ export default function CatalogPage() {
         </> : <><BrowserPanel session={browserSession} onSession={updateBrowser} running={!!running || busy} /><label htmlFor="catalog-urls" className="block font-medium">FEPY product page URLs</label><p className="mt-1 mb-3 text-xs text-stone-500">One HTTPS product URL per line, up to 100. Browser Use reads each live page and captures desktop/mobile evidence before assessment.</p><textarea id="catalog-urls" value={urls} disabled={busy || running} onChange={e=>setUrls(e.target.value)} rows={7} placeholder="https://www.fepy.com/your-product" className="w-full rounded border border-stone-300 p-3 font-mono text-xs" /><button disabled={busy || running} className="mt-2 text-xs underline" onClick={()=>{try {setUrls(parseCsv(csv).map(row=>row.product_url).filter(Boolean).join("\n"));} catch {setError("Load a valid CSV first.");}}}>Use product URLs from CSV</button></>}
         <div className="mt-4 flex flex-wrap gap-5 text-sm">
           <label><input type="checkbox" checked={useDecisions} disabled={busy || running} onChange={e => setUseDecisions(e.target.checked)} className="mr-2" />Content & image decisions</label>
-          <label><input type="checkbox" checked={useEmbeddings} disabled={busy || running} onChange={e => setUseEmbeddings(e.target.checked)} className="mr-2" />Image similarity & duplicate candidates</label>
+          <label><input type="checkbox" checked={mode === "live" ? liveEmbeddings : useEmbeddings} disabled={busy || running} onChange={e => mode === "live" ? setLiveEmbeddings(e.target.checked) : setUseEmbeddings(e.target.checked)} className="mr-2" />Image similarity & duplicate candidates</label>
         </div>
+        {mode === "live" && <p className="mt-2 text-xs text-stone-600">Fast live audit: page findings and Decisions run first. Image similarity is optional and off by default; its first run loads a CPU model and takes longer. Page findings appear while AI checks continue.</p>}
         <p className="mt-2 text-xs text-stone-500">Selected AI checks send product data to the audit worker. Content and image decisions use OpenAI; similarity runs on the worker.</p>
         {setupMessage && <p role="status" className="mt-3 text-sm text-amber-800">{setupMessage} You can still run rules only.</p>}
         {capabilities && <p className="mt-3 text-xs text-stone-500">Decisions API: {capabilities.decisions.configured ? "configured" : "awaiting OpenAI API key"} · EmbeddingGemma 2: {readable(capabilities.embeddings.state)}. The first similarity audit may take longer while the model loads.</p>}
@@ -176,13 +180,14 @@ export default function CatalogPage() {
         </div>
       </section>
       {error && <p role="alert" className="mt-4 rounded bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-      {job && <section aria-live="polite" className="mt-4 rounded bg-amber-50 p-4 text-sm"><p>{job.mode === "live" ? "Live PDP audit" : "AI audit"}: {job.status === "completed" && failedAIChecks ? "finished with errors" : readable(job.status)} · {job.completed}/{job.total} products processed{job.mode === "live" && ` · ${job.pagesCompleted || 0}/${job.total} pages attempted · ${readable(job.phase || "page_reading")} ${job.pagesSkipped ? `· ${job.pagesSkipped} skipped after access block` : ""}`}</p>{failedAIChecks > 0 && <p className="mt-2 font-medium text-red-800">{failedAIChecks} product(s) could not be fully audited. Review the page or AI errors below; these are not successful assessments.</p>}<progress className="mt-2 w-full" max={job.total} value={job.phase === "page_reading" ? job.pagesCompleted || 0 : job.completed} aria-label="AI audit progress" /><p className="mt-2 text-xs">Keep this page open to receive results. Audit results are available on the worker for 24 hours; download them to keep a copy.</p>{pollError && <p className="mt-2 text-red-800">{pollError} Retrying progress refresh…</p>}</section>}
+      {job && <section aria-live="polite" className="mt-4 rounded bg-amber-50 p-4 text-sm"><p>{job.mode === "live" ? "Live PDP audit" : "AI audit"}: {job.status === "completed" && failedAIChecks ? "finished with errors" : readable(job.status)} · {job.completed}/{job.total} products processed{job.mode === "live" && ` · ${job.pagesCompleted || 0}/${job.total} pages attempted · ${({page_reading:"Reading pages and capturing evidence",product_image_fetch:"Preparing product image",content_decisions:"Assessing content and screenshots",image_similarity:"Computing image similarity (first run may load model)",finished:"Finished",assessment:"Preparing assessment"} as Record<string,string>)[job.phase || "page_reading"] || readable(job.phase || "page_reading")} ${job.pagesSkipped ? `· ${job.pagesSkipped} skipped after access block` : ""}`}</p>{failedAIChecks > 0 && <p className="mt-2 font-medium text-red-800">{failedAIChecks} product(s) could not be fully audited. Review the page or AI errors below; these are not successful assessments.</p>}<progress className="mt-2 w-full" max={job.total} value={job.phase === "page_reading" ? job.pagesCompleted || 0 : job.completed} aria-label="AI audit progress" /><p className="mt-2 text-xs">Keep this page open to receive results. Captured findings appear before AI finishes. Audit results are available on the worker for 24 hours; download them to keep a copy.</p>{pollError && <p className="mt-2 text-red-800">{pollError} Retrying progress refresh…</p>}</section>}
       {job?.mode === "live" && job.results.filter(item=>item.live?.status === "error").map(item=><LiveEvidence key={item.rowIndex} page={item.live!} jobId={job.id} index={item.rowIndex} />)}
       {summary && <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">{[["Rows", summary.total], ["Data ready", summary.pass], ["Needs review", summary.review], ["Missing data", summary.fail]].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-stone-200 bg-white p-4"><p className="text-xs text-stone-500">{label}</p><p className="mt-1 text-3xl">{value}</p></div>)}</section>}
       {results.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{["all", "fail", "review", "pass", "ai_review"].map(item => <button key={item} aria-pressed={filter === item} onClick={() => setFilter(item)} className={`rounded border px-3 py-2 text-sm ${filter === item ? "border-amber-500 bg-amber-100" : "border-stone-200 bg-white"}`}>{item === "ai_review" ? "AI needs review" : readable(item)}</button>)}</div>}
       {shown.map(({ row, index, ai }) => <article key={index} className="mt-4 rounded-xl border border-stone-200 bg-white p-5">
         <div className="flex flex-wrap justify-between gap-3"><h2 className="font-serif text-xl">{row.sku}</h2><strong className="text-sm">Data readiness: {row.status === "fail" ? "missing required data" : row.status === "review" ? "needs review" : "ready"} · {row.score}/100</strong></div>
         <p className="mt-2">{row.title || "No English title"}</p><p className="mt-1 text-xs text-stone-500">SEO field coverage {row.seoScore}% · AI answer field coverage {row.aeoScore}% · These are readiness checks, not ranking scores.</p>
+        {ai?.timings && <p className="mt-2 text-xs text-stone-600">Processing time: image fetch {timing(ai.timings.imageFetchSeconds)} · Decisions {timing(ai.timings.decisionsSeconds)} · similarity {timing(ai.timings.similaritySeconds)}.</p>}
         {ai?.live && job && <LiveEvidence page={ai.live} jobId={job.id} index={index} />}
         {ai && <div className="mt-4 grid gap-4 md:grid-cols-2">
           <section className="rounded-lg bg-stone-50 p-4"><h3 className="text-sm font-semibold">Content & image decisions</h3><p className="mt-1 text-xs">{readable(ai.decisions.status)}</p>{ai.decisions.error && <p className="mt-2 text-sm text-amber-800">{ai.decisions.error}</p>}{ai.decisions.imageWarning && <p className="mt-2 text-xs text-amber-800">{ai.decisions.imageWarning}</p>}{ai.decisions.checks?.map(check => <div key={check.name} className="mt-3 rounded-lg border border-stone-200 bg-white p-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold">{labels[check.name] || readable(check.name)}</p><span className={`rounded-full px-2 py-1 text-xs ${check.needsReview ? "bg-amber-100 text-amber-900" : "bg-emerald-50 text-emerald-900"}`}>{check.needsReview ? "Review required" : "No issue detected"}</span></div><p className="mt-2">{assessmentText(check.assessment)}</p><p className="mt-1 text-xs text-stone-500">{check.confidence !== null ? `Model confidence: ${Math.round(check.confidence * 100)}% · not an accuracy guarantee` : "No confidence assessment"}</p><p className="mt-2 text-xs leading-5 text-stone-600">{checkAction(check.name, check.assessment, check.needsReview)}</p></div>)}</section>
