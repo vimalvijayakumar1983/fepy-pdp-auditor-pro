@@ -46,6 +46,10 @@ function hasUrl(value: string) {
   return /^https?:\/\//i.test(value);
 }
 
+function humanStock(value: string) {
+  return value.split("_").join(" ");
+}
+
 export function auditCatalogRow(row: CatalogRow): CatalogAudit {
   const sku = text(row.sku) || "MISSING-SKU";
   const title = text(row.title_en);
@@ -84,7 +88,7 @@ export function auditCatalogRow(row: CatalogRow): CatalogAudit {
 
   const suggestedTitle = [brand, model, title || category].filter(Boolean).join(" ").replace(/\s+/g, " ").slice(0, 110);
   const suggestedIntro = `${brand || "This"} ${model || "product"} is a ${category.toLowerCase()} for UAE site and trade work. ${specs || "Add the key spec before publishing."}`;
-  const suggestedMeta = `${suggestedTitle}. ${price ? `AED ${price}` : "Price on request"}${stock ? `, ${stock.replaceAll("_", " ")}` : ""}.`.slice(0, 160);
+  const suggestedMeta = `${suggestedTitle}. ${price ? `AED ${price}` : "Price on request"}${stock ? `, ${humanStock(stock)}` : ""}.`.slice(0, 160);
   const suggestedAlt = suggestedTitle;
 
   const seoChecks = [Boolean(title), Boolean(metaTitle), Boolean(metaDescription), Boolean(alt), hasUrl(url), hasUrl(image)];

@@ -1,12 +1,11 @@
 # Railway worker
 
-Railway is the later home for the EmbeddingGemma audit worker. The Next.js app on Vercel stays the UI.
+Not deployed yet. Railway is not connected to this workspace.
 
-Do not deploy the embedding model in v1. The catalog page already scores Excel/CSV exports with rules, SEO, and AEO checks.
+When Railway is connected, deploy this folder as a service:
 
-When the catalog export is ready:
-1. Create a Railway service from this repo.
-2. Set the start command to a Python worker that reads image URLs and writes mismatch scores.
-3. Point `EMBED_API_URL` on Vercel at that service.
+```bash
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
 
-The worker is intentionally not required for the first audit.
+Set AUDITOR_WORKER_URL on the Vercel project to the Railway URL. Do not put API keys in the repo.
