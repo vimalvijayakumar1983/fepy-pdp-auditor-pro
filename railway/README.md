@@ -33,3 +33,11 @@ Tests use mocked inference/HTTP; they validate contracts, authentication, input 
 Reference docs:
 - https://ai.google.dev/gemma/docs/embeddinggemma/multimodal-embeddinggemma-with-sentence-transformers
 - https://developers.openai.com/api/docs/guides/decisions
+
+## Live PDP auditing
+
+`POST /live-jobs` accepts `urls` (1–100 public HTTPS fepy.com/www.fepy.com product URLs) and optional `decisions`/`embeddings` booleans. Browser Use 0.13.11 drives local headless Chromium with direct page controls; no navigation LLM/API key is needed. One page is read at a time on this 4GB worker, before model assessment. This is a bounded batch, not an unrestricted autonomous shopping agent.
+
+Read progress and captured fields with the existing authenticated `GET /jobs/{id}`. `phase` separates page collection from assessment; per-page errors are never scored as successful products. Screenshots at `GET /jobs/{id}/evidence/{index}/desktop` or `/mobile` show the first viewport and expire with jobs after 24h. Evidence files are purged on subsequent live jobs. Product sections, metadata and JSON-LD are collected; robots.txt, response headers, actual indexing/rankings, manufacturer verification and complete interactions are not covered.
+
+Chromium is installed in the Docker image. Override its executable with `AUDITOR_CHROMIUM_PATH` only if necessary. `ANONYMIZED_TELEMETRY=false` disables Browser Use telemetry. No persistent browser profile or customer login is used. Known product details toggles may be opened; cart, checkout, customer account and admin URLs are rejected.

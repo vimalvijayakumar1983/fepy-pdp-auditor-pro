@@ -1,0 +1,15 @@
+export type LivePage = { status: string; requestedUrl: string; finalUrl?: string; auditedAt?: string; durationSeconds?: number; error?: string; extracted?: Record<string,string>; sources?: Record<string,string>; technical?: {code:string; severity:string; finding:string; evidence:string; action:string}[]; canonical?:string; robots?:string; productSchemaDetected?:boolean; evidence?: {desktop:string;mobile:string} };
+export default function LiveEvidence({page, jobId, index}: {page: LivePage; jobId:string; index:number}) {
+  return <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+    <h3 className="font-semibold">Live page evidence · Browser Use</h3>
+    <a href={page.finalUrl || page.requestedUrl} target="_blank" rel="noreferrer" className="mt-2 block break-all text-sm underline">{page.finalUrl || page.requestedUrl}</a>
+    {page.error ? <p role="alert" className="mt-3 text-sm text-red-800">{page.error} No readiness score or AI assessment was made for this page.</p> : <>
+      <p className="mt-2 text-xs text-stone-600">Captured {page.auditedAt} · {page.durationSeconds}s collection time · English page only. Missing Arabic content here does not establish that an Arabic page is missing.</p>
+      <div className="mt-3 space-y-3">{page.technical?.map(f => <div key={f.code} className="rounded-lg bg-white p-3 text-sm"><span className="text-xs font-semibold uppercase text-amber-900">{f.severity}</span><h4 className="mt-1 font-semibold">{f.finding}</h4><p className="mt-1 text-stone-600">Evidence: {f.evidence}</p><p className="mt-2">Action: {f.action}</p></div>)}</div>
+      <p className="mt-3 text-xs">Canonical: {page.canonical || "not found"} · Robots meta: {page.robots || "not found"} · Product JSON-LD: {page.productSchemaDetected ? "detected" : "not detected"}. Detection does not validate rich-result eligibility, indexing or rankings.</p>
+      {page.evidence && <div className="mt-3 flex flex-wrap gap-3">{["desktop","mobile"].map(view=><a key={view} className="rounded border border-stone-300 bg-white px-3 py-2 text-xs underline" href={`/api/catalog-ai/${jobId}/evidence/${index}/${view}`} target="_blank" rel="noreferrer">Open {view} screenshot</a>)}</div>}
+      <p className="mt-2 text-xs text-stone-500">Screenshots show the first viewport, not the entire page or a full interaction test.</p>
+      <details className="mt-3 text-xs"><summary className="cursor-pointer font-medium">Where each field came from</summary><dl className="mt-2 space-y-1">{Object.entries(page.sources || {}).map(([field,source])=><div key={field}><dt className="inline font-semibold">{field}: </dt><dd className="inline">{source}</dd></div>)}</dl></details>
+    </>}
+  </section>;
+}

@@ -5,3 +5,5 @@ pillow>=11.3,<13
 numpy>=2,<3
 sentence-transformers==6.1.0
 transformers==5.19.0
+
+browser-use==0.13.11
