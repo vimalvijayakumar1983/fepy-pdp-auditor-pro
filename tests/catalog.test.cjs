@@ -29,3 +29,6 @@ console.log('CSV and rule regression tests passed.');
 
 const combined=auditCatalogRow({sku:'C',title_en:'Bosch GSB 18V-50 06019H51L0 Cordless Drill',brand:'Bosch',model_number:'GSB 18V-50 + 06019H51L0'});
 assert.equal(combined.suggestedTitle,'Bosch GSB 18V-50 06019H51L0 Cordless Drill');
+
+const adhesive=auditCatalogRow({sku:'P',title_en:'Pattex Construction Adhesive PL150 Solvent Based 380g Beige Cartridge Heavy-Duty Construction Bonding',brand:'Pattex',model_number:'PL 150',specs_inline:'Item Type: Construction Adhesive | Size: 380g | Color: Beige'});
+assert.equal(adhesive.suggestedMetaTitle,'Pattex PL 150 Construction Adhesive 380g Beige');

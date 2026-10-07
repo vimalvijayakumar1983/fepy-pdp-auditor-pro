@@ -7,7 +7,7 @@ function extractHtml(html,extract){
  const wrap=node=>node?{
   get innerText(){return $(node).text()},get textContent(){return $(node).text()},
   get children(){return $(node).children().toArray().map(wrap)},get tagName(){return node.tagName?.toUpperCase()},
-  get lang(){return $(node).attr('lang') || ''},get currentSrc(){return $(node).attr('src') || ''},get src(){return $(node).attr('src') || ''},naturalWidth:0,
+  get href(){return $(node).attr('href')||''},get lang(){return $(node).attr('lang') || ''},get currentSrc(){return $(node).attr('src') || ''},get src(){return $(node).attr('src') || ''},naturalWidth:0,
   getBoundingClientRect(){return {width:100}},getAttribute(key){return $(node).attr(key)},
   querySelectorAll(selector){return $(node).find(selector).toArray().map(wrap)}
  }:null;
@@ -27,6 +27,12 @@ const extract=JSON.parse(execFileSync('python',['-c','import sys,json;sys.path.i
   data=JSON.parse(await page.evaluate(extract));
   assert.equal(data.row.category,'Cordless Drills');
   assert.equal(data.row.model_number,'06019H51L0');
+  await page.setContent(`<h1>Pattex adhesive</h1><p>Free delivery on orders above AED 200</p><section><p>Based on 22 reviews</p><p>الكابل طوله كافٍ. الحقيبة متينة.</p></section><h2>Similar Products</h2><footer>Free Delivery on all orders above AED 100 across UAE</footer><a href="https://datasheets.tdx.henkel.com/PATTEX-PL150-en_AE.pdf">Technical sheet</a>`);
+  data=JSON.parse(await page.evaluate(extract));
+  assert.match(data.row.page_context,/AED 200/);
+  assert.match(data.row.page_context,/AED 100/);
+  assert.match(data.row.reviews_text,/الكابل/);
+  assert.deepEqual(JSON.parse(data.row.reference_urls),['https://datasheets.tdx.henkel.com/PATTEX-PL150-en_AE.pdf']);
   console.log('Rendered breadcrumb, model fallback and FAQ extraction regressions passed.');
 
 })().catch(err=>{console.error(err);process.exit(1)});

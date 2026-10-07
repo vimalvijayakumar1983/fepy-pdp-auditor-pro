@@ -241,6 +241,11 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
         job["sourceRows"] = rows
     if live is not None:
         job.update(mode="live", phase="assessment", pagesCompleted=sum(page.get("failureKind") != "skipped_after_block" for page in live), pagesSkipped=sum(page.get("failureKind") == "skipped_after_block" for page in live))
+    with connection() as db:
+        prior = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if prior:
+        parent_id = json.loads(prior[0]).get("reassessedFrom")
+        if parent_id: job["reassessedFrom"] = parent_id
     assessment_started = time.monotonic()
     if live is not None:
         job["results"] = [{"rowIndex": i, "sku": rows[i]["sku"], "live": page, "decisions": {"status": "pending" if use_decisions else "not_requested"}, "embeddings": {"status": "pending" if use_embeddings else "not_requested"}} for i, page in enumerate(live)]

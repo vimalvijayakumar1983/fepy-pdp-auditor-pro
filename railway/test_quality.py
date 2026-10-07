@@ -38,14 +38,15 @@ class QualityTests(unittest.TestCase):
     def test_ungrounded_ai_quotes_are_withheld(self):
         issue=dict(code='template',finding='Template',pageQuote='Ergonomic Design',referenceQuote='',sourceId='',action='Replace generic content',severity='review',category='content')
         bad=dict(issue,code='bad',pageQuote='Invented text that does not exist')
+        duplicate=dict(issue,code='duplicated_faq',finding='Duplicated FAQ block')
         badref=dict(issue,code='badref',sourceId='reference_0',referenceQuote='Invented manufacturer specification')
         class Reply:
             status_code=200
-            def json(self):return dict(status='completed',output=[{'content':[{'type':'output_text','text':json.dumps(dict(summary='Review',issues=[issue,bad,badref],limitations=['No performance test']))}]}])
+            def json(self):return dict(status='completed',output=[{'content':[{'type':'output_text','text':json.dumps(dict(summary='Review',issues=[issue,bad,badref,duplicate],limitations=['No performance test']))}]}])
         with patch.dict(os.environ,{'OPENAI_API_KEY':'fake'}),patch.object(quality.httpx,'post',return_value=Reply()):
             result=quality.detailed_review(ROW,[dict(status='matched_model',url=quality.PL150_SOURCE,text=DOC)])
         self.assertEqual(len(result['issues']),1)
-        self.assertEqual(result['rejectedUngroundedIssues'],2)
+        self.assertEqual(result['rejectedUngroundedIssues'],3)
     def test_source_failure_never_becomes_verified(self):
         with patch.object(quality,'fetch_reference',side_effect=ValueError('bad')),patch.object(quality,'detailed_review',return_value={'status':'completed','issues':[]}):
             result=quality.review_product(ROW)

@@ -100,7 +100,12 @@ export function auditCatalogRow(row: CatalogRow, options: { checkArabic?: boolea
   const identity = title ? `${suggestedTitle.replace(/[.]+$/, "")}.` : "";
   const suggestedIntro = [description && title && description.toLowerCase().startsWith(title.toLowerCase()) ? description : [identity, description].filter(Boolean).join(" "), specSentence && `Specifications: ${specSentence}.`].filter(Boolean).join(" ");
   const concise = (value: string, length: number) => value.length <= length ? value : value.slice(0, length + 1).replace(/\s+\S*$/, "").trim();
-  const suggestedMetaTitle = suggestedTitle;
+  const itemType = facts.find(f=>/^item type$/i.test(f.label))?.value;
+  const identityParts = [brand, model, itemType, ...facts.filter(f=>/^(size|colou?r|pack quantity|pack size|battery voltage)$/i.test(f.label)).map(f=>f.value)].filter((part): part is string => typeof part === "string" && !!part);
+  const seen = new Set<string>();
+  const compactIdentity = identityParts.filter(part=>{const key=compact(part);if(seen.has(key))return false;seen.add(key);return true;}).join(" ");
+  // Preserve variant facts rather than blindly cutting at a character limit.
+  const suggestedMetaTitle = brand && model && itemType && compactIdentity.length < suggestedTitle.length ? compactIdentity : suggestedTitle;
   const snippetParts = [identity, specSentence && `Specifications: ${specSentence}.`, ...description.split(/(?<=[.!?])\s+/)].filter(Boolean);
   let suggestedMeta = "";
   for (const part of snippetParts) {
