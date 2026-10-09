@@ -53,4 +53,12 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(result['manufacturerStatus'],'not_verified')
         self.assertEqual(result['sources'][0]['status'],'unavailable')
         self.assertTrue(result['findings'])
+    def test_quality_reports_separate_source_and_model_timing_and_usage(self):
+        review={'status':'completed','issues':[],'model':'test-model','usage':{'input_tokens':12,'output_tokens':7}}
+        with patch.object(quality,'reference_candidates',return_value=[]),patch.object(quality,'detailed_review',return_value=review):
+            result=quality.review_product(ROW)
+        self.assertEqual(result['usage'],review['usage'])
+        self.assertEqual(result['model'],'test-model')
+        self.assertGreaterEqual(result['timings']['referenceFetchSeconds'],0)
+        self.assertGreaterEqual(result['timings']['detailedReviewSeconds'],0)
 if __name__=='__main__':unittest.main()

@@ -37,7 +37,7 @@ def provider_request(method, path, payload=None):
 
 def public_session(item):
     # CDP URL and provider API credentials must never leave the worker.
-    return {key: item.get(key) for key in ('id', 'status', 'liveUrl', 'timeoutAt', 'countryCode', 'locationVerification')}
+    return {key: item.get(key) for key in ('id', 'status', 'liveUrl', 'timeoutAt', 'countryCode', 'locationVerification', 'sessionCreateSeconds')}
 
 
 def lookup(connection, session_id):
@@ -84,7 +84,9 @@ def build_router(connection, require_auth):
             if sum(item['status'] == 'active' and item['expires'] > time.time() for item in sessions) >= 2:
                 raise HTTPException(429, 'Stop an existing live browser before opening another.')
             # Start blank. Never retry FEPY via a new network route after a known access block.
+            session_started = time.monotonic()
             data = provider_request('POST', '/browsers', {'proxyCountryCode': 'ae', 'timeout': 30, 'browserScreenWidth': 1365, 'browserScreenHeight': 900, 'allowResizing': True, 'solveCaptchas': False, 'enableRecording': False})
+            session_seconds = round(time.monotonic() - session_started, 3)
             provider_id = data.get('id', '')
             if not re.fullmatch(r'[a-fA-F0-9-]{36}', provider_id):
                 raise HTTPException(502, 'Browser Use returned an invalid session identifier.')
@@ -102,6 +104,7 @@ def build_router(connection, require_auth):
                     item['expires'] = datetime.fromisoformat(data['timeoutAt'].replace('Z', '+00:00')).timestamp()
                 except ValueError:
                     pass
+            item['sessionCreateSeconds'] = session_seconds
             persist(connection, item)
             return public_session(item)
 

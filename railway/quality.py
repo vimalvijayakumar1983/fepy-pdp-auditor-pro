@@ -96,8 +96,9 @@ def detailed_review(row,references):
         quote=issue.get('pageQuote','');refquote=issue.get('referenceQuote','');source=sources.get(issue.get('sourceId',''))
         if len(quote)<8 or normalized(quote) not in page_text or (issue.get('sourceId') and (not source or len(refquote)<8 or normalized(refquote) not in normalized(source['text']))) or (refquote and not source):rejected+=1;continue
         issues.append(finding('ai_'+issue['code'],issue['finding'],quote+(' | Manufacturer: '+refquote if refquote else ''),issue['action'],issue['severity'],issue['category'],'ai_evidence_review',source['url'] if source else None))
-    return {'status':'completed','issues':issues,'summary':report.get('summary',''),'limitations':report.get('limitations',[]),'rejectedUngroundedIssues':rejected,'model':data.get('model'),'version':VERSION}
+    return {'status':'completed','issues':issues,'summary':report.get('summary',''),'limitations':report.get('limitations',[]),'rejectedUngroundedIssues':rejected,'model':data.get('model'),'usage':data.get('usage',{}),'version':VERSION}
 def review_product(row,urls=None,cache=None):
+    started=time.monotonic()
     references=[]
     for url in reference_candidates(row,urls):
         try:
@@ -105,6 +106,8 @@ def review_product(row,urls=None,cache=None):
             r=cache('reference-v1:'+url+':'+row.get('model_number',''),compute) if cache else compute();references.append(r)
         except Exception as error:references.append(dict(url=url,status='unavailable',error='PDF could not be read ('+type(error).__name__+'). No comparison made.'))
     rules=page_findings(row)+reference_findings(row,references)
+    references_seconds=round(time.monotonic()-started,3)
+    detail_started=time.monotonic()
     try:detailed=detailed_review(row,references)
     except Exception as error:detailed={'status':'error','issues':[],'error':'Detailed review failed ('+type(error).__name__+'); rule findings remain available.'}
-    return dict(status=detailed['status'],findings=rules+detailed.get('issues',[]),sources=[{k:v for k,v in r.items() if k!='text'} for r in references],manufacturerStatus='document_compared' if any(r.get('status')=='matched_model' for r in references) else 'not_verified',limitations=detailed.get('limitations',[]),error=detailed.get('error'),rejectedUngroundedIssues=detailed.get('rejectedUngroundedIssues',0),version=VERSION)
+    return dict(status=detailed['status'],findings=rules+detailed.get('issues',[]),sources=[{k:v for k,v in r.items() if k!='text'} for r in references],manufacturerStatus='document_compared' if any(r.get('status')=='matched_model' for r in references) else 'not_verified',limitations=detailed.get('limitations',[]),error=detailed.get('error'),rejectedUngroundedIssues=detailed.get('rejectedUngroundedIssues',0),version=VERSION,model=detailed.get('model'),usage=detailed.get('usage',{}),timings={'referenceFetchSeconds':references_seconds,'detailedReviewSeconds':round(time.monotonic()-detail_started,3)})

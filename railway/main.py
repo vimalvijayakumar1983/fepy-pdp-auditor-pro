@@ -235,6 +235,17 @@ def similarities(vectors):
     return neighbors
 
 
+def timed_quality_review(row, reference_urls):
+    started = time.monotonic()
+    try:
+        quality = review_product(row, reference_urls, lambda key, compute: cached(key, compute, 86400))
+    except Exception as error:
+        quality = {"status": "error", "findings": page_findings(row), "sources": [],
+                   "manufacturerStatus": "not_verified", "version": VERSION,
+                   "error": "Detailed review failed (" + type(error).__name__ + "); page findings remain available."}
+    return quality, round(time.monotonic() - started, 3)
+
+
 def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=False, reference_urls=None):
     job = {"id": job_id, "created": time.time(), "status": "running", "total": len(rows), "completed": 0, "results": [], "warnings": ["Similarity and confidence are review signals, not proof of an exact SKU match."]}
     if live is None:
@@ -244,7 +255,10 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
     with connection() as db:
         prior = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
     if prior:
-        parent_id = json.loads(prior[0]).get("reassessedFrom")
+        prior_job = json.loads(prior[0])
+        job["created"] = prior_job["created"]
+        job["timings"] = prior_job.get("timings", {})
+        parent_id = prior_job.get("reassessedFrom")
         if parent_id: job["reassessedFrom"] = parent_id
     assessment_started = time.monotonic()
     if live is not None:
@@ -252,6 +266,10 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
     save_job(job)
     text_vectors, image_vectors = {}, {}
     embedding_failure = None
+    # Opt in only after a matched live benchmark. One extra I/O thread per audit;
+    # it receives the same captured row and keeps every evidence validator.
+    overlap = detailed and use_decisions and os.getenv("AUDITOR_OVERLAP_ASSESSMENTS", "").lower() == "true"
+    quality_executor = ThreadPoolExecutor(max_workers=1) if overlap else None
     try:
         for index, row in enumerate(rows):
             result = {"rowIndex": index, "sku": row["sku"], "decisions": {"status": "not_requested"}, "embeddings": {"status": "not_requested"}}
@@ -277,6 +295,10 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
                 except Exception:
                     image_error = "Image could not be fetched. Check the URL, approved CDN hosts, format and size."
             result["timings"]["imageFetchSeconds"] = round(time.monotonic() - image_started, 2)
+            quality_future = None
+            if quality_executor:
+                result["quality"] = {"status": "running", "findings": [], "sources": [], "manufacturerStatus": "pending"}
+                quality_future = quality_executor.submit(timed_quality_review, row, reference_urls)
             if use_decisions:
                 job["phase"] = "content_decisions"
                 result["decisions"]["status"] = "running"
@@ -304,11 +326,11 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
                 job["phase"] = "source_verification"
                 result["quality"] = {"status": "running", "findings": [], "sources": [], "manufacturerStatus": "pending"}
                 save_job(job)
-                detail_started = time.monotonic()
-                result["quality"] = review_product(row, reference_urls, lambda key, compute: cached(key, compute, 86400))
+                result["quality"], quality_seconds = quality_future.result() if quality_future else timed_quality_review(row, reference_urls)
                 existing_codes = {f["code"] for f in (result.get("live") or {}).get("technical", [])}
                 result["quality"]["findings"] = [f for f in result["quality"]["findings"] if f["code"] not in existing_codes]
-                result["timings"]["qualitySeconds"] = round(time.monotonic() - detail_started, 2)
+                result["timings"]["qualitySeconds"] = quality_seconds
+                result["timings"]["assessmentsOverlapped"] = bool(quality_future)
                 save_job(job)
             if use_embeddings:
                 job["phase"] = "image_similarity"
@@ -347,6 +369,11 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
             job["phase"] = "finished"
     except Exception:
         job.update(status="failed", error="Audit interrupted. Completed row results remain available.")
+    finally:
+        if quality_executor:
+            quality_executor.shutdown(wait=True)
+    job.setdefault("timings", {})["assessmentSeconds"] = round(time.monotonic() - assessment_started, 3)
+    job["timings"]["totalSeconds"] = round(max(0, time.time() - job["created"]), 3)
     save_job(job)
 
 
@@ -399,6 +426,12 @@ class LiveAuditRequest(BaseModel):
 
 def run_live_job(job_id, urls, use_decisions, use_embeddings, cdp_url=None, detailed=True, reference_urls=None):
     job = {"id": job_id, "created": time.time(), "mode": "live", "status": "running", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
+    with connection() as db:
+        queued = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if queued:
+        job["created"] = json.loads(queued[0])["created"]
+    job["timings"] = {"queueSeconds": round(max(0, time.time() - job["created"]), 3)}
+    collection_started = time.monotonic()
     def update(count, pages):
         job["pagesCompleted"] = count
         job["results"] = [{"rowIndex": i, "sku": page.get("extracted", {}).get("sku", ""), "live": page, "decisions": {"status": "pending"}, "embeddings": {"status": "pending"}} for i, page in enumerate(pages)]
@@ -447,10 +480,14 @@ def run_live_job(job_id, urls, use_decisions, use_embeddings, cdp_url=None, deta
             config_path.unlink(missing_ok=True)
             output_path.unlink(missing_ok=True)
         rows = [clean_row(page.get("extracted", {"product_url": page["requestedUrl"]})) for page in pages]
+        job["timings"]["browserCollectionSeconds"] = round(time.monotonic() - collection_started, 3)
+        save_job(job)
         run_job(job_id, rows, use_decisions, use_embeddings, pages, detailed, reference_urls)
     except Exception as error:
         logging.error("Browser collection interrupted: %s", type(error).__name__)
         job.update(status="failed", error="Browser collection interrupted. Completed page evidence remains available.")
+        job["timings"]["browserCollectionSeconds"] = round(time.monotonic() - collection_started, 3)
+        job["timings"]["totalSeconds"] = round(max(0, time.time() - job["created"]), 3)
         save_job(job)
 
 
