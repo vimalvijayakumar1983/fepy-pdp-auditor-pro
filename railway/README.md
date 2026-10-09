@@ -60,6 +60,12 @@ The collector reads every linked breadcrumb instead of CSS `a:last-of-type` (whi
 
 Live audits default to page evidence plus Decisions; image similarity can be selected explicitly. Findings are published as soon as page evidence arrives and retained during assessment. Decisions finishes and is saved before optional EmbeddingGemma loading/inference. Per-product timing records separate image fetch, Decisions and similarity; browser collection time remains in page evidence. Visible FEPY sections skip unnecessary legacy tab enumeration. No browser data is reused as fresh evidence.
 
+### Latency measurement and optional assessment overlap
+
+Browser Use Ultrafast is a hosted `/api/v4/runs` model preset (`bu-ultrafast`); the documented `/api/v4/browsers` schema has no corresponding setting. The direct CDP collector does not use an agent navigation model. Job timings retain queue, browser batch and total time. Page timings separate browser startup (first page only), navigation, readiness, extraction, desktop and mobile evidence. Quality timings separate source retrieval from detailed AI review; model usage is retained when supplied by the provider. These stages include processing overhead as documented; do not sum nested/overlapping timings as wall time.
+
+`AUDITOR_OVERLAP_ASSESSMENTS=true` opts into one additional I/O thread, overlapping detailed source/AI review with fast Decisions for the same captured product. Default is off. The job thread alone publishes results; fast checks remain visible before optional similarity. Existing prompts, quote validation, model matching, sources, screenshot capture, access gating and no-retry behavior remain in place. Before enabling in production, run a matched comparison with both test pages and check the extra concurrent API request against account rate limits. This flag does not select Ultrafast or change browser routing.
+
 `node tests/live-extract.test.cjs` checks extraction against HTML fixtures with a DOM adapter; it does not launch a real browser. Python tests verify exact finding evidence and that Decisions/page results are readable while similarity runs.
 
 

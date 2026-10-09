@@ -153,17 +153,26 @@ def technical_findings(data, requested_url):
 
 async def collect_one(browser, url, job_id, index, evidence_dir):
     start = time.monotonic()
+    timings = {}
+    checkpoint = start
+    def mark(name):
+        nonlocal checkpoint
+        now = time.monotonic()
+        timings[name] = round(now - checkpoint, 3)
+        checkpoint = now
     page = None
     try:
         validate_url(url)
         page = await browser.new_page(url)
         await page.set_viewport_size(1365, 900)
+        mark("navigationSeconds")
         # Bounded readiness wait; no indefinite network-idle wait on analytics requests.
         for _ in range(20):
             state = decode_result(await page.evaluate("() => JSON.stringify({ready: !!document.querySelector('h1') && document.readyState !== 'loading', text: document.body?.innerText?.length || 0})"))
             if state.get("ready") and state.get("text", 0) > 200:
                 break
             await asyncio.sleep(.5)
+        mark("readinessSeconds")
         final_url = await page.get_url()
         validate_url(final_url)
         initial = decode_result(await page.evaluate(EXTRACT))
@@ -180,16 +189,19 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
                     await element.click()
                     await asyncio.sleep(.3)
         data = decode_result(await page.evaluate(EXTRACT))
+        mark("extractionSeconds")
         await page.evaluate("() => { window.scrollTo(0, 0); return true; }")
         desktop = evidence_dir / f"{job_id}-{index}-desktop.jpg"
         save_shot(await page.screenshot(format="jpeg", quality=80), desktop)
+        mark("desktopEvidenceSeconds")
         await page.set_viewport_size(390, 844)
         await asyncio.sleep(.3)
         mobile = evidence_dir / f"{job_id}-{index}-mobile.jpg"
         save_shot(await page.screenshot(format="jpeg", quality=80), mobile)
         size = decode_result(await page.evaluate("() => JSON.stringify({width: document.documentElement.scrollWidth, viewport: innerWidth})"))
         data.update(mobileOverflow=size['width'] > size['viewport'] + 8, mobilePageWidth=size['width'])
-        return {"status": "completed", "requestedUrl": url, "finalUrl": final_url, "auditedAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), "durationSeconds": round(time.monotonic()-start, 2), "extracted": data["row"], "sources": data["sources"], "technical": technical_findings(data, url), "canonical": data["canonical"], "robots": data["robots"], "productSchemaDetected": data["productSchema"], "h1Count": data["h1Count"], "imageUrls": data["imageUrls"], "evidence": {"desktop": f"{job_id}-{index}-desktop.jpg", "mobile": f"{job_id}-{index}-mobile.jpg"}}
+        mark("mobileEvidenceSeconds")
+        return {"status": "completed", "requestedUrl": url, "finalUrl": final_url, "auditedAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), "durationSeconds": round(time.monotonic()-start, 2), "timings": timings, "extracted": data["row"], "sources": data["sources"], "technical": technical_findings(data, url), "canonical": data["canonical"], "robots": data["robots"], "productSchemaDetected": data["productSchema"], "h1Count": data["h1Count"], "imageUrls": data["imageUrls"], "evidence": {"desktop": f"{job_id}-{index}-desktop.jpg", "mobile": f"{job_id}-{index}-mobile.jpg"}}
     except Exception as error:
         diagnostic = {}
         if page:
@@ -204,7 +216,7 @@ async def collect_one(browser, url, job_id, index, evidence_dir):
                 diagnostic["evidence"] = {"desktop": shot.name}
             except Exception:
                 pass
-        return dict(diagnostic, status="error", requestedUrl=url, durationSeconds=round(time.monotonic()-start,2), error=str(error) if isinstance(error, ValueError) else "Browser collection failed ("+type(error).__name__+"). No page assessment was made.")
+        return dict(diagnostic, status="error", requestedUrl=url, durationSeconds=round(time.monotonic()-start,2), timings=timings, error=str(error) if isinstance(error, ValueError) else "Browser collection failed ("+type(error).__name__+"). No page assessment was made.")
     finally:
         if page:
             try:
@@ -223,13 +235,17 @@ async def collect_pages(urls, job_id, evidence_dir, update, cdp_url=None):
     results = []
     evidence_dir.mkdir(parents=True, exist_ok=True)
     try:
+        startup = time.monotonic()
         await browser.start()
+        startup_seconds = round(time.monotonic() - startup, 3)
         # One tab at a time on the existing 4GB worker while the embedding model is resident.
         for index, url in enumerate(urls):
             try:
                 result = await asyncio.wait_for(collect_one(browser, url, job_id, index, evidence_dir), timeout=70)
             except asyncio.TimeoutError:
                 result = {"status": "error", "requestedUrl": url, "error": "Page collection timed out. No page assessment was made."}
+            if index == 0:
+                result.setdefault("timings", {})["browserStartupSeconds"] = startup_seconds
             results.append(result)
             update(index + 1, results)
             if result.get("failureKind") == "access_blocked":
