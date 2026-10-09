@@ -25,7 +25,7 @@ def page_findings(row):
     mismatch=re.search(r'[^.\n]*(?:cable|carrying case|الكابل|الحقيبة)[^.\n]*',row.get('reviews_text',''),re.I)
     if chemical and mismatch:out.append(finding('review_product_mismatch','A review appears to describe a different product type',mismatch.group().strip()[:250],'Check the review-to-SKU mapping and provenance. This is a relevance signal, not proof of a fabricated review.',category='trust'))
     model=re.sub(r'[^a-z0-9]','',row.get('model_number','').lower());meta=row.get('meta_title','')
-    if model and model not in re.sub(r'[^a-z0-9]','',meta.lower()):out.append(finding('search_title_identity','Search title omits the distinguishing model','Search title: '+meta+'; model: '+row.get('model_number',''),'Include the verified model and pack size in a concise search title.',category='seo'))
+    if model and any(re.sub(r'[^a-z0-9]','',part.lower()) not in re.sub(r'[^a-z0-9]','',meta.lower()) for part in re.split(r'\s*[+|]\s*', row.get('model_number','')) if part.strip()):out.append(finding('search_title_identity','Search title omits the distinguishing model','Search title: '+meta+'; model: '+row.get('model_number',''),'Include the verified model and pack size in a concise search title.',category='seo'))
     return out
 
 def validate_reference_url(url):

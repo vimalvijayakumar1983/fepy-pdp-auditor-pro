@@ -8,25 +8,31 @@
     "start": "next start",
     "lint": "next lint",
     "postinstall": "next telemetry disable || true",
-    "test": "node tests/catalog.test.cjs"
+    "test": "node tests/catalog.test.cjs",
+    "test:worker": "python -m unittest discover -s railway -p \"test_*.py\" -q",
+    "test:workspace": "node tests/workspace-smoke.cjs",
+    "format:check": "prettier --check app/workspace app/login app/api/auth app/api/workspace lib/workspace.ts lib/session.ts middleware.ts app/globals.css"
   },
   "dependencies": {
+    "cheerio": "1.0.0-rc.12",
+    "he": "^1.2.0",
+    "lucide-react": "0.451.0",
     "next": "14.2.35",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "he": "^1.2.0",
-    "lucide-react": "0.451.0",
-    "zod": "3.23.8",
-    "cheerio": "1.0.0-rc.12"
+    "zod": "3.23.8"
   },
   "devDependencies": {
-    "autoprefixer": "10.4.19",
-    "postcss": "8.4.41",
-    "tailwindcss": "3.4.10",
-    "typescript": "5.5.4",
+    "@axe-core/playwright": "4.11.0",
     "@types/he": "1.2.3",
     "@types/node": "20.14.10",
     "@types/react": "18.3.3",
-    "@types/react-dom": "18.3.0"
+    "@types/react-dom": "18.3.0",
+    "autoprefixer": "10.4.19",
+    "playwright": "1.62.1",
+    "postcss": "8.4.41",
+    "prettier": "3.6.2",
+    "tailwindcss": "3.4.10",
+    "typescript": "5.5.4"
   }
 }
