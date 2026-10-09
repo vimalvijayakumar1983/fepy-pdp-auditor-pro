@@ -3,13 +3,18 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "FEPY PDP Auditor Pro",
-  description: "Audit and improve PDP content fast.",
+  description:
+    "A persistent workspace for evidence-backed product page improvements.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-gradient-to-br from-gray-50 to-white">{children}</body>
+      <body className="min-h-screen">{children}</body>
     </html>
   );
 }

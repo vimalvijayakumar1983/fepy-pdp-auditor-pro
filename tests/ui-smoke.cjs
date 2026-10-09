@@ -9,26 +9,31 @@ const checks=[{name:'content_consistency',assessment:'contradiction',confidence:
 const fake=http.createServer(async(req,res)=>{
  assert.equal(req.headers.authorization,'Bearer test-worker-token');authCalls++;
  res.setHeader('Content-Type','application/json');
+ if(req.url==='/workspace') return res.end(JSON.stringify({projects:[]}));
  if(req.url==='/capabilities') return res.end(JSON.stringify({decisions:{configured:true},embeddings:{configured:true,state:'ready'}}));
+ if(req.url==='/jobs'&&req.method==='GET') return res.end(JSON.stringify({jobs:[]}));
+ if(req.url==='/browser-sessions') return res.end(JSON.stringify({configured:false,auditAccessApproved:false,activeSessions:[]}));
  if(req.method==='POST') {let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);rows=body.rows;assert.equal(body.decisions,true);assert.equal(body.embeddings,true);res.statusCode=202;return res.end(JSON.stringify({id:'a'.repeat(32),status:'queued',total:rows.length}));}
  polls++;
- res.end(JSON.stringify({id:'a'.repeat(32),status:'completed',total:rows.length,completed:rows.length,results:rows.map((r,i)=>({rowIndex:i,sku:r.sku,decisions:{status:'completed',checks},embeddings:{status:'completed',imageStatus:'not_supplied',imageTextSimilarity:null,textNeighbors:[{rowIndex:1-i,sku:rows[1-i].sku,similarity:.99}],imageNeighbors:[]}}))}));
+ res.end(JSON.stringify({id:'a'.repeat(32),status:'completed',sourceRows:rows,total:rows.length,completed:rows.length,results:rows.map((r,i)=>({rowIndex:i,sku:r.sku,decisions:{status:'completed',checks},embeddings:{status:'completed',imageStatus:'not_supplied',imageTextSimilarity:null,textNeighbors:[{rowIndex:1-i,sku:rows[1-i].sku,similarity:.99}],imageNeighbors:[]}}))}));
 });
-const server=spawn('node',['node_modules/next/dist/bin/next','start','--port','3100'],{env:{...process.env,AUDITOR_WORKER_URL:'http://127.0.0.1:3101',AUDITOR_WORKER_TOKEN:'test-worker-token'},stdio:'ignore'});
+const server=spawn('node',['node_modules/next/dist/bin/next','start','--port','3100'],{env:{...process.env,AUDITOR_WORKER_URL:'http://127.0.0.1:3101',AUDITOR_WORKER_TOKEN:'test-worker-token',AUDITOR_APP_PASSWORD:'synthetic-ui-password',AUDITOR_SESSION_SECRET:'synthetic-ui-session-secret-32-characters'},stdio:'ignore'});
 (async()=>{
  let browser;
  try {
   await new Promise(r=>fake.listen(3101,'127.0.0.1',r));
   for(let i=0;i<100;i++){try{await fetch('http://127.0.0.1:3100/catalog');break;}catch{await new Promise(r=>setTimeout(r,100));}}
-  browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+  browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE||chromium.executablePath(),args:['--no-sandbox']});
   const page=await browser.newPage({viewport:{width:1280,height:960}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto('http://127.0.0.1:3100/catalog');
+  await page.getByLabel('Workspace password').fill('synthetic-ui-password');await page.getByRole('button',{name:'Enter workspace'}).click();await page.waitForURL('**/workspace');
+  await page.goto('http://127.0.0.1:3100/catalog');await page.getByRole('button',{name:'CSV audit',exact:true}).click();
   await page.locator('#catalog-csv').fill(sample);
   await page.getByRole('button',{name:'Run rules + selected AI checks'}).click();
   await page.getByText('AI audit: completed').waitFor({timeout:15000});
   assert.equal(rows[0].title_en,'Bosch Drill, 18V');assert.equal(rows[0].description_en,'First line\nsecond line');
-  assert.ok((await page.getByText('confidence 96%',{exact:false}).count())===2);
+  assert.ok((await page.getByText('Model confidence: 96%',{exact:false}).count())===2);
   await page.getByRole('button',{name:'Mark manually reviewed'}).first().click();
   const downloadEvent=page.waitForEvent('download');await page.getByRole('button',{name:'Download results'}).click();
   const download=await downloadEvent;const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));
@@ -38,7 +43,7 @@ const server=spawn('node',['node_modules/next/dist/bin/next','start','--port','3
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:'/tmp/catalog-ai-mobile.png',fullPage:true});
-  const invalid=await fetch('http://127.0.0.1:3100/api/catalog-audit',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"rows":[null]}'});assert.equal(invalid.status,400);
+  const cookies=await page.context().cookies();const cookie=cookies.map(x=>x.name+'='+x.value).join('; ');const invalid=await fetch('http://127.0.0.1:3100/api/catalog-audit',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie,Origin:'http://127.0.0.1:3100'},body:'{"rows":[null]}'});assert.equal(invalid.status,400);
   assert.equal(errors.length,0);assert.ok(polls>0&&authCalls>=3);
   console.log('UI/proxy smoke passed: quoted CSV, AI submission, progress polling, findings, manual review, JSON export, invalid input and mobile layout. Inference mocked.');
  }finally {if(browser)await browser.close();server.kill();fake.close();}

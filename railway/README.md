@@ -60,6 +60,12 @@ The collector reads every linked breadcrumb instead of CSS `a:last-of-type` (whi
 
 Live audits default to page evidence plus Decisions; image similarity can be selected explicitly. Findings are published as soon as page evidence arrives and retained during assessment. Decisions finishes and is saved before optional EmbeddingGemma loading/inference. Per-product timing records separate image fetch, Decisions and similarity; browser collection time remains in page evidence. Visible FEPY sections skip unnecessary legacy tab enumeration. No browser data is reused as fresh evidence.
 
+### Latency measurement and optional assessment overlap
+
+Browser Use Ultrafast is a hosted `/api/v4/runs` model preset (`bu-ultrafast`); the documented `/api/v4/browsers` schema has no corresponding setting. The direct CDP collector does not use an agent navigation model. Job timings retain queue, browser batch and total time. Page timings separate browser startup (first page only), navigation, readiness, extraction, desktop and mobile evidence. Quality timings separate source retrieval from detailed AI review; model usage is retained when supplied by the provider. These stages include processing overhead as documented; do not sum nested/overlapping timings as wall time.
+
+`AUDITOR_OVERLAP_ASSESSMENTS=true` opts into one additional I/O thread, overlapping detailed source/AI review with fast Decisions for the same captured product. Default is off. The job thread alone publishes results; fast checks remain visible before optional similarity. Existing prompts, quote validation, model matching, sources, screenshot capture, access gating and no-retry behavior remain in place. Before enabling in production, run a matched comparison with both test pages and check the extra concurrent API request against account rate limits. This flag does not select Ultrafast or change browser routing.
+
 `node tests/live-extract.test.cjs` checks extraction against HTML fixtures with a DOM adapter; it does not launch a real browser. Python tests verify exact finding evidence and that Decisions/page results are readable while similarity runs.
 
 
@@ -69,3 +75,13 @@ Live audits default to fast page findings followed by model-matched manufacturer
 Pattex PL150 automatically checks Henkel's UAE technical sheet. Other models can use up to two approved manufacturer PDF URLs supplied in the UI or discovered on the PDP. Default allowed reference domains: datasheets.tdx.henkel.com, dm.henkel-dam.com, www.bosch-professional.com, www.makita.ae. Add exact trusted manufacturer hosts through AUDITOR_REFERENCE_HOSTS. HTTPS/public DNS only; no redirects, 5 MB limit, 30-page limit, readable text required. Retrieved sources cache for 24 hours and retain retrieval timestamps. This is not universal manufacturer-source discovery or full certification.
 
 Authenticated recent-audit history covers 24 hours. Rechecking saved page evidence creates a new audit, retains the original capture time and uses current assessment logic without another browser session. New page-context/review checks require a fresh capture if an older audit did not collect those fields. Fast results remain visible during the deeper phase. Findings export as CSV (with spreadsheet formula escaping) and the complete report exports as JSON. Field completeness is displayed separately from accuracy and source coverage; no SEO ranking or AI citation guarantee is given.
+
+## Persistent product improvement workspace
+
+`workspace.py` adds authenticated project, product, saved-audit, finding-workflow, content-draft and export endpoints under `/workspace`. It uses the existing SQLite volume with additive tables. `Dockerfile` must copy `workspace.py` alongside the worker modules.
+
+Live or catalog jobs can carry `projectId`; a completed or interrupted job is archived server-side after saving its results. A browser client is not needed for archival. Archival failure is surfaced in `workspaceSaveError`, and manual save is idempotent. Old, unsaved jobs still expire after 24 hours. Archived jobs can be reopened through the existing job/evidence endpoints, and archived screenshot names are excluded from cleanup. Back up both database and evidence directory.
+
+Review state and drafts use a product revision lease; stale edits return 409. A fresh capture can mark a previously returned finding `not_detected` only when its relevant check ran. Missing/failed manufacturer comparisons do not clear source-based findings. Saved-evidence reassessments retain the original capture time and cannot establish a storefront correction. Captured text, drafts and factual verification remain distinct.
+
+The FEPY permission flag applies to **all** `/live-jobs` submissions, including ones without a Cloud session. Keep it false until site-administrator authorization is confirmed. No new Ultrafast API/model switch is introduced: the current browser-session API has no demonstrated Ultrafast control. The optional assessment overlap flag from the performance review remains off by default.

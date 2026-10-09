@@ -54,9 +54,27 @@ with connection() as db:
             db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(job), job_id))
 
 
+WORKSPACE_ROUTER = None
+
+
 def save_job(job):
     with connection() as db:
         db.execute("INSERT OR REPLACE INTO jobs VALUES (?,?,?)", (job["id"], job["created"], json.dumps(job)))
+    if job.get("projectId") and job["status"] in ("completed", "failed") and WORKSPACE_ROUTER:
+        try:
+            WORKSPACE_ROUTER.archive_job(job["projectId"], job["id"])
+        except Exception:
+            logging.exception("Workspace archive failed for audit %s", job["id"])
+            job["workspaceSaveError"] = "Completed audit could not be archived. Retry saving it from audit history."
+            with connection() as db:
+                db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(job), job["id"]))
+
+
+def validate_project(project_id):
+    if project_id:
+        with connection() as db:
+            if not db.execute("SELECT 1 FROM workspace_projects WHERE id=?", (project_id,)).fetchone():
+                raise HTTPException(404, "Project not found.")
 
 
 def cached(key, compute, ttl=86400 * 30):
@@ -84,6 +102,7 @@ app.include_router(build_router(connection, require_auth))
 
 
 class AuditRequest(BaseModel):
+    projectId: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     rows: list[dict] = Field(min_length=1, max_length=500)
     decisions: bool = True
     embeddings: bool = True
@@ -116,6 +135,8 @@ def safe_image(url):
     hosts = os.getenv("AUDITOR_IMAGE_HOSTS", "fepy.com,imagekit.io,ik.imagekit.io,res.cloudinary.com").split(",")
     if not any(parsed.hostname == host.strip() or parsed.hostname.endswith("." + host.strip()) for host in hosts if host.strip()):
         raise ValueError("Image host is not approved. Add your CDN to AUDITOR_IMAGE_HOSTS.")
+    if (parsed.hostname == "fepy.com" or parsed.hostname.endswith(".fepy.com")) and os.getenv("FEPY_AUDITOR_ACCESS_APPROVED", "").lower() != "true":
+        raise ValueError("FEPY-hosted image access requires site-administrator authorization.")
     addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
     if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
         raise ValueError("Image URL must resolve to public internet addresses.")
@@ -235,6 +256,17 @@ def similarities(vectors):
     return neighbors
 
 
+def timed_quality_review(row, reference_urls):
+    started = time.monotonic()
+    try:
+        quality = review_product(row, reference_urls, lambda key, compute: cached(key, compute, 86400))
+    except Exception as error:
+        quality = {"status": "error", "findings": page_findings(row), "sources": [],
+                   "manufacturerStatus": "not_verified", "version": VERSION,
+                   "error": "Detailed review failed (" + type(error).__name__ + "); page findings remain available."}
+    return quality, round(time.monotonic() - started, 3)
+
+
 def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=False, reference_urls=None):
     job = {"id": job_id, "created": time.time(), "status": "running", "total": len(rows), "completed": 0, "results": [], "warnings": ["Similarity and confidence are review signals, not proof of an exact SKU match."]}
     if live is None:
@@ -244,7 +276,11 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
     with connection() as db:
         prior = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
     if prior:
-        parent_id = json.loads(prior[0]).get("reassessedFrom")
+        prior_job = json.loads(prior[0])
+        job["created"] = prior_job["created"]
+        job["projectId"] = prior_job.get("projectId")
+        job["timings"] = prior_job.get("timings", {})
+        parent_id = prior_job.get("reassessedFrom")
         if parent_id: job["reassessedFrom"] = parent_id
     assessment_started = time.monotonic()
     if live is not None:
@@ -252,6 +288,10 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
     save_job(job)
     text_vectors, image_vectors = {}, {}
     embedding_failure = None
+    # Opt in only after a matched live benchmark. One extra I/O thread per audit;
+    # it receives the same captured row and keeps every evidence validator.
+    overlap = detailed and use_decisions and os.getenv("AUDITOR_OVERLAP_ASSESSMENTS", "").lower() == "true"
+    quality_executor = ThreadPoolExecutor(max_workers=1) if overlap else None
     try:
         for index, row in enumerate(rows):
             result = {"rowIndex": index, "sku": row["sku"], "decisions": {"status": "not_requested"}, "embeddings": {"status": "not_requested"}}
@@ -277,6 +317,10 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
                 except Exception:
                     image_error = "Image could not be fetched. Check the URL, approved CDN hosts, format and size."
             result["timings"]["imageFetchSeconds"] = round(time.monotonic() - image_started, 2)
+            quality_future = None
+            if quality_executor:
+                result["quality"] = {"status": "running", "findings": [], "sources": [], "manufacturerStatus": "pending"}
+                quality_future = quality_executor.submit(timed_quality_review, row, reference_urls)
             if use_decisions:
                 job["phase"] = "content_decisions"
                 result["decisions"]["status"] = "running"
@@ -304,11 +348,11 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
                 job["phase"] = "source_verification"
                 result["quality"] = {"status": "running", "findings": [], "sources": [], "manufacturerStatus": "pending"}
                 save_job(job)
-                detail_started = time.monotonic()
-                result["quality"] = review_product(row, reference_urls, lambda key, compute: cached(key, compute, 86400))
+                result["quality"], quality_seconds = quality_future.result() if quality_future else timed_quality_review(row, reference_urls)
                 existing_codes = {f["code"] for f in (result.get("live") or {}).get("technical", [])}
                 result["quality"]["findings"] = [f for f in result["quality"]["findings"] if f["code"] not in existing_codes]
-                result["timings"]["qualitySeconds"] = round(time.monotonic() - detail_started, 2)
+                result["timings"]["qualitySeconds"] = quality_seconds
+                result["timings"]["assessmentsOverlapped"] = bool(quality_future)
                 save_job(job)
             if use_embeddings:
                 job["phase"] = "image_similarity"
@@ -347,11 +391,17 @@ def run_job(job_id, rows, use_decisions, use_embeddings, live=None, detailed=Fal
             job["phase"] = "finished"
     except Exception:
         job.update(status="failed", error="Audit interrupted. Completed row results remain available.")
+    finally:
+        if quality_executor:
+            quality_executor.shutdown(wait=True)
+    job.setdefault("timings", {})["assessmentSeconds"] = round(time.monotonic() - assessment_started, 3)
+    job["timings"]["totalSeconds"] = round(max(0, time.time() - job["created"]), 3)
     save_job(job)
 
 
 @app.post("/jobs", status_code=202, dependencies=[Depends(require_auth)])
 def create_job(body: AuditRequest):
+    validate_project(body.projectId)
     if not body.decisions and not body.embeddings:
         raise HTTPException(400, "Select at least one AI check.")
     try:
@@ -366,7 +416,7 @@ def create_job(body: AuditRequest):
         if sum(s in ("running", "queued") for s in active) >= 3:
             raise HTTPException(429, "Three audits are already running or queued. Retry after one finishes.")
         job_id = secrets.token_hex(16)
-        job = {"id": job_id, "created": time.time(), "status": "queued", "total": len(rows), "completed": 0, "results": []}
+        job = {"id": job_id, "created": time.time(), "status": "queued", "projectId": body.projectId, "total": len(rows), "completed": 0, "results": []}
         db.execute("INSERT INTO jobs VALUES (?,?,?)", (job_id, job["created"], json.dumps(job)))
     EXECUTOR.submit(run_job, job_id, rows, body.decisions, body.embeddings)
     return {"id": job_id, "status": "queued", "total": len(rows)}
@@ -383,12 +433,15 @@ def recent_jobs():
 def get_job(job_id: str):
     with connection() as db:
         found = db.execute("SELECT payload FROM jobs WHERE id=? AND created>?", (job_id, time.time() - 86400)).fetchone()
+        if not found:
+            found = db.execute("SELECT payload FROM workspace_audits WHERE id=?", (job_id,)).fetchone()
     if not found:
         raise HTTPException(404, "Audit not found or expired after 24 hours.")
     return json.loads(found[0])
 
 
 class LiveAuditRequest(BaseModel):
+    projectId: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     browserSessionId: str | None = None
     urls: list[str] = Field(min_length=1, max_length=100)
     detailed: bool = True
@@ -399,6 +452,13 @@ class LiveAuditRequest(BaseModel):
 
 def run_live_job(job_id, urls, use_decisions, use_embeddings, cdp_url=None, detailed=True, reference_urls=None):
     job = {"id": job_id, "created": time.time(), "mode": "live", "status": "running", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
+    with connection() as db:
+        queued = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if queued:
+        job["created"] = json.loads(queued[0])["created"]
+        job["projectId"] = json.loads(queued[0]).get("projectId")
+    job["timings"] = {"queueSeconds": round(max(0, time.time() - job["created"]), 3)}
+    collection_started = time.monotonic()
     def update(count, pages):
         job["pagesCompleted"] = count
         job["results"] = [{"rowIndex": i, "sku": page.get("extracted", {}).get("sku", ""), "live": page, "decisions": {"status": "pending"}, "embeddings": {"status": "pending"}} for i, page in enumerate(pages)]
@@ -409,7 +469,10 @@ def run_live_job(job_id, urls, use_decisions, use_embeddings, cdp_url=None, deta
         evidence_dir.mkdir(parents=True, exist_ok=True)
         for file in evidence_dir.glob("*.jpg"):
             if file.stat().st_mtime < time.time() - 86400:
-                file.unlink()
+                with connection() as db:
+                    retained = db.execute("SELECT 1 FROM workspace_audits WHERE id=?", (file.name.split("-")[0],)).fetchone()
+                if not retained:
+                    file.unlink()
         config_path = DATA_DIR / f"{job_id}-browser-input.json"
         output_path = DATA_DIR / f"{job_id}-browser-output.json"
         config_path.touch(mode=0o600, exist_ok=True)
@@ -447,15 +510,22 @@ def run_live_job(job_id, urls, use_decisions, use_embeddings, cdp_url=None, deta
             config_path.unlink(missing_ok=True)
             output_path.unlink(missing_ok=True)
         rows = [clean_row(page.get("extracted", {"product_url": page["requestedUrl"]})) for page in pages]
+        job["timings"]["browserCollectionSeconds"] = round(time.monotonic() - collection_started, 3)
+        save_job(job)
         run_job(job_id, rows, use_decisions, use_embeddings, pages, detailed, reference_urls)
     except Exception as error:
         logging.error("Browser collection interrupted: %s", type(error).__name__)
         job.update(status="failed", error="Browser collection interrupted. Completed page evidence remains available.")
+        job["timings"]["browserCollectionSeconds"] = round(time.monotonic() - collection_started, 3)
+        job["timings"]["totalSeconds"] = round(max(0, time.time() - job["created"]), 3)
         save_job(job)
 
 
 @app.post("/live-jobs", status_code=202, dependencies=[Depends(require_auth)])
 def create_live_job(body: LiveAuditRequest):
+    if os.getenv("FEPY_AUDITOR_ACCESS_APPROVED", "").lower() != "true":
+        raise HTTPException(409, "Automated FEPY access requires site-administrator authorization. Enable FEPY_AUDITOR_ACCESS_APPROVED only after permission is confirmed.")
+    validate_project(body.projectId)
     from live_pdp import validate_url
     try:
         for url in body.referenceUrls: validate_reference_url(url)
@@ -473,7 +543,7 @@ def create_live_job(body: LiveAuditRequest):
         if sum(status in ("running", "queued") for status in active) >= 3:
             raise HTTPException(429, "Three audits are already running or queued.")
         job_id = secrets.token_hex(16)
-        job = {"id": job_id, "created": time.time(), "mode": "live", "status": "queued", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
+        job = {"id": job_id, "created": time.time(), "mode": "live", "projectId": body.projectId, "status": "queued", "phase": "page_reading", "total": len(urls), "completed": 0, "pagesCompleted": 0, "results": []}
         db.execute("INSERT INTO jobs VALUES (?,?,?)", (job_id, job["created"], json.dumps(job)))
     EXECUTOR.submit(run_live_job, job_id, urls, body.decisions, body.embeddings, cdp_url, body.detailed, body.referenceUrls)
     return job
@@ -501,7 +571,7 @@ def reassess(job_id: str, body: ReassessRequest):
         active = sum(json.loads(p)["status"] in ("queued", "running") for (p,) in db.execute("SELECT payload FROM jobs WHERE created>?", (time.time()-86400,)))
         if active >= 3: raise HTTPException(429, "Three audits are running or queued.")
         new_id = secrets.token_hex(16)
-        job = dict(id=new_id, created=time.time(), status="queued", mode="live", total=len(pages), completed=0, results=[], reassessedFrom=job_id)
+        job = dict(id=new_id, created=time.time(), status="queued", mode="live", total=len(pages), completed=0, results=[], reassessedFrom=job_id, projectId=old.get("projectId"))
         db.execute("INSERT INTO jobs VALUES (?,?,?)", (new_id, job["created"], json.dumps(job)))
     for index, page in enumerate(pages):
         old_index = next(r["rowIndex"] for r in old["results"] if r.get("live", {}).get("requestedUrl") == page["requestedUrl"])
@@ -531,3 +601,24 @@ def get_evidence(job_id: str, index: int, view: str):
     if filename != expected or not path.is_file():
         raise HTTPException(404, "Evidence not found or expired.")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+from workspace import build_router as build_workspace_router
+WORKSPACE_ROUTER = build_workspace_router(connection, require_auth, get_job, clean_row)
+app.include_router(WORKSPACE_ROUTER)
+
+
+def recover_workspace_audits():
+    """Finish archival after a worker restart interrupted the terminal save hook."""
+    with connection() as db:
+        pending = db.execute("SELECT j.payload FROM jobs j LEFT JOIN workspace_audits a ON j.id=a.id WHERE a.id IS NULL AND j.created>?", (time.time()-86400,)).fetchall()
+    for (payload,) in pending:
+        job = json.loads(payload)
+        if job.get("projectId") and job["status"] in ("completed", "failed"):
+            try:
+                WORKSPACE_ROUTER.archive_job(job["projectId"], job["id"])
+            except Exception:
+                logging.warning("Saved workspace audit requires manual archive retry: %s", job["id"])
+
+
+recover_workspace_audits()
